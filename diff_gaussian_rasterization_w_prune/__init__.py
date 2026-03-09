@@ -311,15 +311,15 @@ class GaussianRasterizer(nn.Module):
         )
     #TODO(Kevin add counter version of forward)
     def forward_count(self, means3D, means2D, opacities, shs = None, colors_precomp = None, scales = None, rotations = None, cov3D_precomp = None):
-        
+
         raster_settings = self.raster_settings
 
         if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
             raise Exception('Please provide excatly one of either SHs or precomputed colors!')
-        
+
         if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
             raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
-        
+
         if shs is None:
             shs = torch.Tensor([])
         if colors_precomp is None:
@@ -339,9 +339,70 @@ class GaussianRasterizer(nn.Module):
             shs,
             colors_precomp,
             opacities,
-            scales, 
+            scales,
             rotations,
             cov3D_precomp,
-            raster_settings, 
-        ) 
+            raster_settings,
+        )
+
+    def forward_count_weighted(self, means3D, means2D, opacities, shs = None, colors_precomp = None, scales = None, rotations = None, cov3D_precomp = None):
+        """
+        Forward pass with weighted importance score (alpha * T).
+        Returns: gaussians_count, important_score, weighted_important_score, color, radii
+        """
+        raster_settings = self.raster_settings
+
+        if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
+            raise Exception('Please provide excatly one of either SHs or precomputed colors!')
+
+        if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
+            raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
+
+        if shs is None:
+            shs = torch.Tensor([])
+        if colors_precomp is None:
+            colors_precomp = torch.Tensor([])
+
+        if scales is None:
+            scales = torch.Tensor([])
+        if rotations is None:
+            rotations = torch.Tensor([])
+        if cov3D_precomp is None:
+            cov3D_precomp = torch.Tensor([])
+
+        # Invoke C++/CUDA rasterization routine with weighted counting
+        args = (
+            raster_settings.bg,
+            means3D,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            raster_settings.scale_modifier,
+            cov3D_precomp,
+            raster_settings.viewmatrix,
+            raster_settings.projmatrix,
+            raster_settings.tanfovx,
+            raster_settings.tanfovy,
+            raster_settings.image_height,
+            raster_settings.image_width,
+            shs,
+            raster_settings.sh_degree,
+            raster_settings.campos,
+            raster_settings.prefiltered,
+            raster_settings.debug,
+        )
+
+        if raster_settings.debug:
+            cpu_args = cpu_deep_copy_tuple(args)
+            try:
+                gaussians_count, important_score, weighted_important_score, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = _C.count_gaussians_weighted(*args)
+            except Exception as ex:
+                torch.save(cpu_args, "snapshot_fw_weighted.dump")
+                print("\nAn error occured in forward_count_weighted. Please forward snapshot_fw_weighted.dump for debugging.")
+                raise ex
+        else:
+            gaussians_count, important_score, weighted_important_score, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = _C.count_gaussians_weighted(*args)
+
+        return gaussians_count, important_score, weighted_important_score, color, radii 
 
