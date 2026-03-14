@@ -95,6 +95,24 @@ namespace FORWARD
 		float* weighted_important_score,
 		float* out_color);
 
+	// Count gaussian with weighted residual score (alpha * T * residual)
+	void count_gaussian_weighted_residual(
+		const dim3 grid, dim3 block,
+		const uint2* ranges,
+		const uint32_t* point_list,
+		int W, int H,
+		const float2* points_xy_image,
+		const float* features,
+		const float4* conic_opacity,
+		float* final_T,
+		uint32_t* n_contrib,
+		const float* bg_color,
+		const float* residual_map,
+		int* gaussians_count,
+		float* important_score,
+		float* weighted_important_score,
+		float* weighted_residual_score,
+		float* out_color); 
 }
 
 

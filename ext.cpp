@@ -18,4 +18,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("mark_visible", &markVisible);
   m.def("count_gaussians", &CountGaussiansCUDA);
   m.def("count_gaussians_weighted", &CountGaussiansWeightedCUDA);
+  m.def("count_gaussians_weighted_residual", &CountGaussiansWeightedResidualCUDA);
 }
