@@ -22,6 +22,82 @@ namespace
 	constexpr int RENDER_MODE_SPLAT = 0;
 	constexpr int RENDER_MODE_FLAT_BALL = 1;
 	constexpr int RENDER_MODE_GAUSSIAN_BALL = 2;
+	constexpr int RENDER_MODE_CONTRIB_COUNT = 3;
+	constexpr int RENDER_MODE_CONTRIB_MAX = 4;
+	constexpr int CONTRIB_MAX_MODE_RATIO = 0;
+	constexpr int CONTRIB_MAX_MODE_COLOR = 1;
+	constexpr float CONTRIB_COUNT_VIS_MAX = 64.0f;
+	constexpr float CONTRIB_COUNT_VIS_LOG_DENOM = 4.17438727f; // log(65)
+}
+
+__device__ __forceinline__ float clamp01(float x)
+{
+	return fminf(1.0f, fmaxf(0.0f, x));
+}
+
+__device__ __forceinline__ float3 lerpColor(const float3& a, const float3& b, float t)
+{
+	return make_float3(
+		a.x + (b.x - a.x) * t,
+		a.y + (b.y - a.y) * t,
+		a.z + (b.z - a.z) * t
+	);
+}
+
+__device__ __forceinline__ float3 contribCountColor(uint32_t count)
+{
+	if (count == 0)
+		return make_float3(0.0f, 0.0f, 0.0f);
+
+	float capped = fminf(static_cast<float>(count), CONTRIB_COUNT_VIS_MAX);
+	float normalized = clamp01(logf(1.0f + capped) / CONTRIB_COUNT_VIS_LOG_DENOM);
+
+	const float3 stops[] = {
+		make_float3(0.051f, 0.051f, 0.149f),
+		make_float3(0.000f, 0.467f, 0.745f),
+		make_float3(0.180f, 0.800f, 0.443f),
+		make_float3(0.992f, 0.906f, 0.145f),
+		make_float3(0.843f, 0.188f, 0.153f),
+	};
+
+	float scaled = normalized * 4.0f;
+	int idx = min(3, max(0, static_cast<int>(floorf(scaled))));
+	float local_t = clamp01(scaled - static_cast<float>(idx));
+	return lerpColor(stops[idx], stops[idx + 1], local_t);
+}
+
+__device__ __forceinline__ float3 contribMaxRatioColor(float ratio)
+{
+	float normalized = clamp01(ratio);
+
+	const float3 stops[] = {
+		make_float3(0.051f, 0.051f, 0.149f),
+		make_float3(0.000f, 0.467f, 0.745f),
+		make_float3(0.180f, 0.800f, 0.443f),
+		make_float3(0.992f, 0.906f, 0.145f),
+		make_float3(0.843f, 0.188f, 0.153f),
+	};
+
+	float scaled = normalized * 4.0f;
+	int idx = min(3, max(0, static_cast<int>(floorf(scaled))));
+	float local_t = clamp01(scaled - static_cast<float>(idx));
+	return lerpColor(stops[idx], stops[idx + 1], local_t);
+}
+
+__device__ __forceinline__ bool evalStandardSplatAlpha(
+	const float2& pixel_delta,
+	const float4& conic_opacity,
+	float& alpha)
+{
+	float power = -0.5f * (
+		conic_opacity.x * pixel_delta.x * pixel_delta.x +
+		conic_opacity.z * pixel_delta.y * pixel_delta.y
+	) - conic_opacity.y * pixel_delta.x * pixel_delta.y;
+	if (power > 0.0f)
+		return false;
+
+	alpha = min(0.99f, conic_opacity.w * exp(power));
+	return alpha >= (1.0f / 255.0f);
 }
 
 // Forward method for converting the input spherical harmonics
@@ -280,7 +356,9 @@ renderCUDA(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	int render_mode)
+	int render_mode,
+	float contrib_threshold,
+	int contrib_max_mode)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -310,80 +388,212 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
+	uint32_t pixel_count = 0;
 	float C[CHANNELS] = { 0 };
-
-	// Iterate over batches until all done or range is complete
-	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+	if (render_mode == RENDER_MODE_CONTRIB_COUNT || render_mode == RENDER_MODE_CONTRIB_MAX)
 	{
-		// End if entire block votes that it is done rasterizing
-		int num_done = __syncthreads_count(done);
-		if (num_done == BLOCK_SIZE)
-			break;
+		float total_metric = 0.0f;
+		float clamped_threshold = fminf(0.99f, fmaxf(0.5f, contrib_threshold));
+		float max_metric = 0.0f;
+		float3 max_contrib_color = make_float3(0.0f, 0.0f, 0.0f);
 
-		// Collectively fetch per-Gaussian data from global to shared
-		int progress = i * BLOCK_SIZE + block.thread_rank();
-		if (range.x + progress < range.y)
+		for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
 		{
-			int coll_id = point_list[range.x + progress];
-			collected_id[block.thread_rank()] = coll_id;
-			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
-			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
-		}
-		block.sync();
+			int num_done = __syncthreads_count(done);
+			if (num_done == BLOCK_SIZE)
+				break;
 
-		// Iterate over current batch
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
-		{
-			// Keep track of current position in range
-			contributor++;
-
-			// Resample using conic matrix (cf. "Surface 
-			// Splatting" by Zwicker et al., 2001)
-			float2 xy = collected_xy[j];
-			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
-			float4 con_o = collected_conic_opacity[j];
-			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
-			if (power > 0.0f)
-				continue;
-
-			// Eq. (2) from 3D Gaussian splatting paper.
-			// Obtain alpha by multiplying with Gaussian opacity
-			// and its exponential falloff from mean.
-			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, con_o.w * exp(power));
-			if (alpha < 1.0f / 255.0f)
-				continue;
-			float blend_alpha = alpha;
-			float color_scale = 1.0f;
-			if (render_mode == RENDER_MODE_FLAT_BALL || render_mode == RENDER_MODE_GAUSSIAN_BALL)
+			int progress = i * BLOCK_SIZE + block.thread_rank();
+			if (range.x + progress < range.y)
 			{
-				if (alpha <= 0.22f)
+				int coll_id = point_list[range.x + progress];
+				collected_id[block.thread_rank()] = coll_id;
+				collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+				collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+			}
+			block.sync();
+
+			for (int j = 0; !done && j < min(BLOCK_SIZE, batch_to_do); j++)
+			{
+				contributor++;
+
+				float2 xy = collected_xy[j];
+				float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+				float alpha = 0.0f;
+				if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
 					continue;
-				blend_alpha = 1.0f;
-				if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
-					color_scale = exp(power);
+
+				int feature_base = collected_id[j] * CHANNELS;
+				float metric = (
+					features[feature_base + 0] +
+					features[feature_base + 1] +
+					features[feature_base + 2]
+				) * alpha * T;
+				total_metric += metric;
+				if (render_mode == RENDER_MODE_CONTRIB_MAX && metric > max_metric)
+				{
+					max_metric = metric;
+					max_contrib_color = make_float3(
+						features[feature_base + 0] * alpha * T,
+						features[feature_base + 1] * alpha * T,
+						features[feature_base + 2] * alpha * T
+					);
+				}
+
+				float test_T = T * (1.0f - alpha);
+				if (test_T < 0.0001f)
+				{
+					T = 0.0f;
+					last_contributor = contributor;
+					done = true;
+					break;
+				}
+
+				T = test_T;
+				last_contributor = contributor;
 			}
-			float test_T = T * (1 - blend_alpha);
-			bool terminate_after = test_T < 0.0001f;
-			if (terminate_after && render_mode == RENDER_MODE_SPLAT)
+		}
+
+		if (render_mode == RENDER_MODE_CONTRIB_COUNT)
+		{
+			bool has_metric = inside && total_metric > 0.0f;
+			float prefix_metric = 0.0f;
+			float target_metric = clamped_threshold * total_metric;
+			float prefix_T = 1.0f;
+			bool prefix_done = !has_metric;
+			if (!has_metric)
+				pixel_count = 0;
+
+			for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
 			{
-				done = true;
-				continue;
+				int num_done = __syncthreads_count(prefix_done);
+				if (num_done == BLOCK_SIZE)
+					break;
+
+				int progress = i * BLOCK_SIZE + block.thread_rank();
+				if (range.x + progress < range.y)
+				{
+					int coll_id = point_list[range.x + progress];
+					collected_id[block.thread_rank()] = coll_id;
+					collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+					collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+				}
+				block.sync();
+
+				for (int j = 0; !prefix_done && j < min(BLOCK_SIZE, batch_to_do); j++)
+				{
+					float2 xy = collected_xy[j];
+					float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+					float alpha = 0.0f;
+					if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
+						continue;
+
+					int feature_base = collected_id[j] * CHANNELS;
+					float metric = (
+						features[feature_base + 0] +
+						features[feature_base + 1] +
+						features[feature_base + 2]
+					) * alpha * prefix_T;
+
+					pixel_count++;
+					prefix_metric += metric;
+					if (prefix_metric >= target_metric)
+					{
+						prefix_done = true;
+						break;
+					}
+
+					float test_T = prefix_T * (1.0f - alpha);
+					if (test_T < 0.0001f)
+					{
+						prefix_done = true;
+						break;
+					}
+					prefix_T = test_T;
+				}
 			}
-			if (terminate_after)
-				test_T = 0.0f;
+		}
+		else if (inside && total_metric > 0.0f)
+		{
+			if (contrib_max_mode == CONTRIB_MAX_MODE_COLOR)
+			{
+				C[0] = max_contrib_color.x;
+				C[1] = max_contrib_color.y;
+				C[2] = max_contrib_color.z;
+			}
+			else
+			{
+				float ratio = max_metric / total_metric;
+				float3 ratio_color = contribMaxRatioColor(ratio);
+				C[0] = ratio_color.x;
+				C[1] = ratio_color.y;
+				C[2] = ratio_color.z;
+			}
+		}
+	}
+	else
+	{
+		for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
+		{
+			int num_done = __syncthreads_count(done);
+			if (num_done == BLOCK_SIZE)
+				break;
 
-			// Eq. (3) from 3D Gaussian splatting paper.
-			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * color_scale * blend_alpha * T;
+			int progress = i * BLOCK_SIZE + block.thread_rank();
+			if (range.x + progress < range.y)
+			{
+				int coll_id = point_list[range.x + progress];
+				collected_id[block.thread_rank()] = coll_id;
+				collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+				collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+			}
+			block.sync();
 
-			T = test_T;
+			for (int j = 0; !done && j < min(BLOCK_SIZE, batch_to_do); j++)
+			{
+				contributor++;
 
-			// Keep track of last range entry to update this
-			// pixel.
-			last_contributor = contributor;
-			if (terminate_after)
-				done = true;
+				float2 xy = collected_xy[j];
+				float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+				float4 con_o = collected_conic_opacity[j];
+				float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+				if (power > 0.0f)
+					continue;
+
+				float alpha = min(0.99f, con_o.w * exp(power));
+				if (alpha < 1.0f / 255.0f)
+					continue;
+
+				float blend_alpha = alpha;
+				float color_scale = 1.0f;
+				if (render_mode == RENDER_MODE_FLAT_BALL || render_mode == RENDER_MODE_GAUSSIAN_BALL)
+				{
+					if (alpha <= 0.22f)
+						continue;
+					blend_alpha = 1.0f;
+					if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
+						color_scale = exp(power);
+				}
+
+				float test_T = T * (1 - blend_alpha);
+				bool terminate_after = test_T < 0.0001f;
+				if (terminate_after && render_mode == RENDER_MODE_SPLAT)
+				{
+					done = true;
+					continue;
+				}
+				if (terminate_after)
+					test_T = 0.0f;
+
+				pixel_count++;
+				for (int ch = 0; ch < CHANNELS; ch++)
+					C[ch] += features[collected_id[j] * CHANNELS + ch] * color_scale * blend_alpha * T;
+
+				T = test_T;
+				last_contributor = contributor;
+				if (terminate_after)
+					done = true;
+			}
 		}
 	}
 
@@ -393,8 +603,25 @@ renderCUDA(
 	{
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
-		for (int ch = 0; ch < CHANNELS; ch++)
-			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+		if (render_mode == RENDER_MODE_CONTRIB_COUNT)
+		{
+			float3 count_color = contribCountColor(pixel_count);
+			out_color[0 * H * W + pix_id] = pixel_count > 0 ? count_color.x : bg_color[0];
+			out_color[1 * H * W + pix_id] = pixel_count > 0 ? count_color.y : bg_color[1];
+			out_color[2 * H * W + pix_id] = pixel_count > 0 ? count_color.z : bg_color[2];
+		}
+		else if (render_mode == RENDER_MODE_CONTRIB_MAX)
+		{
+			bool has_value = (C[0] > 0.0f) || (C[1] > 0.0f) || (C[2] > 0.0f);
+			out_color[0 * H * W + pix_id] = has_value ? C[0] : bg_color[0];
+			out_color[1 * H * W + pix_id] = has_value ? C[1] : bg_color[1];
+			out_color[2 * H * W + pix_id] = has_value ? C[2] : bg_color[2];
+		}
+		else
+		{
+			for (int ch = 0; ch < CHANNELS; ch++)
+				out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+		}
 	}
 }
 
@@ -738,7 +965,9 @@ void FORWARD::render(
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
-	int render_mode)
+	int render_mode,
+	float contrib_threshold,
+	int contrib_max_mode)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -751,7 +980,9 @@ void FORWARD::render(
 		n_contrib,
 		bg_color,
 		out_color,
-		render_mode);
+		render_mode,
+		contrib_threshold,
+		contrib_max_mode);
 }
 
 void FORWARD::count_gaussian(

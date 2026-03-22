@@ -218,7 +218,9 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_color,
 	int* radii,
 	bool debug,
-	int render_mode)
+	int render_mode,
+	float contrib_threshold,
+	int contrib_max_mode)
 
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -333,7 +335,9 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.n_contrib,
 		background,
 		out_color,
-		render_mode), debug)
+		render_mode,
+		contrib_threshold,
+		contrib_max_mode), debug)
 
 	return num_rendered;
 }

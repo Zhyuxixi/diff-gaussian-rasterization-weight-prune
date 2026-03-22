@@ -36,7 +36,9 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& campos,
 	const bool prefiltered,
 	const bool debug,
-	const int render_mode);
+	const int render_mode,
+	const float contrib_threshold,
+	const int contrib_max_mode);
 
 std::tuple<torch::Tensor, torch::Tensor, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 CountGaussiansCUDA(

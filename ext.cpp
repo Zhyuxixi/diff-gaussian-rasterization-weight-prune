@@ -13,6 +13,8 @@
 #include "rasterize_points.h"
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  // Keep pybind registrations aligned with the current rasterizer signatures,
+  // including contrib-threshold and contrib-max forwarding parameters.
   m.def("rasterize_gaussians", &RasterizeGaussiansCUDA);
   m.def("rasterize_gaussians_backward", &RasterizeGaussiansBackwardCUDA);
   m.def("mark_visible", &markVisible);

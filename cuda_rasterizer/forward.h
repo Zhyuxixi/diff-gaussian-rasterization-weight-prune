@@ -61,7 +61,9 @@ namespace FORWARD
 		uint32_t* n_contrib,
 		const float* bg_color,
 		float* out_color,
-		int render_mode);
+		int render_mode,
+		float contrib_threshold,
+		int contrib_max_mode);
 
 	// Count gaussian with opacity-based importance score (original LightGaussian)
 	void count_gaussian(
