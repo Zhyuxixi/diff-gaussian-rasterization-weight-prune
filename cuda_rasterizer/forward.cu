@@ -874,6 +874,109 @@ renderCUDA_count_weighted(
 	}
 }
 
+template <uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+renderCUDA_count_contrib_max(
+	const uint2* __restrict__ ranges,
+	const uint32_t* __restrict__ point_list,
+	int W, int H,
+	const float2* __restrict__ points_xy_image,
+	const float* __restrict__ features,
+	const float4* __restrict__ conic_opacity,
+	float* __restrict__ final_T,
+	uint32_t* __restrict__ n_contrib,
+	const float* __restrict__ bg_color,
+	float* __restrict__ out_color,
+	int* __restrict__ winner_count)
+{
+	auto block = cg::this_thread_block();
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
+	uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
+	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y, H) };
+	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
+	uint32_t pix_id = W * pix.y + pix.x;
+	float2 pixf = { (float)pix.x, (float)pix.y };
+
+	bool inside = pix.x < W && pix.y < H;
+	bool done = !inside;
+
+	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
+	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
+	int toDo = range.y - range.x;
+
+	__shared__ int collected_id[BLOCK_SIZE];
+	__shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+
+	float T = 1.0f;
+	uint32_t contributor = 0;
+	uint32_t last_contributor = 0;
+	float max_metric = 0.0f;
+	int max_id = -1;
+
+	for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
+	{
+		int num_done = __syncthreads_count(done);
+		if (num_done == BLOCK_SIZE)
+			break;
+
+		int progress = i * BLOCK_SIZE + block.thread_rank();
+		if (range.x + progress < range.y)
+		{
+			int coll_id = point_list[range.x + progress];
+			collected_id[block.thread_rank()] = coll_id;
+			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+		}
+		block.sync();
+
+		for (int j = 0; !done && j < min(BLOCK_SIZE, batch_to_do); j++)
+		{
+			contributor++;
+
+			float2 xy = collected_xy[j];
+			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+			float alpha = 0.0f;
+			if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
+				continue;
+
+			int feature_base = collected_id[j] * CHANNELS;
+			float metric = (
+				features[feature_base + 0] +
+				features[feature_base + 1] +
+				features[feature_base + 2]
+			) * alpha * T;
+			if (metric > max_metric)
+			{
+				max_metric = metric;
+				max_id = collected_id[j];
+			}
+
+			float test_T = T * (1.0f - alpha);
+			if (test_T < 0.0001f)
+			{
+				T = 0.0f;
+				last_contributor = contributor;
+				done = true;
+				break;
+			}
+
+			T = test_T;
+			last_contributor = contributor;
+		}
+	}
+
+	if (inside)
+	{
+		final_T[pix_id] = T;
+		n_contrib[pix_id] = last_contributor;
+		if (max_id >= 0)
+			atomicAdd(&winner_count[max_id], 1);
+		for (int ch = 0; ch < CHANNELS; ch++)
+			out_color[ch * H * W + pix_id] = bg_color[ch];
+	}
+}
+
 
 
 // New kernel: count with weighted residual score (alpha * T * residual)
@@ -1046,6 +1149,35 @@ void FORWARD::count_gaussian_weighted(
 		important_score,
 		weighted_important_score);
 }
+
+void FORWARD::count_gaussian_contrib_max(
+	const dim3 grid, dim3 block,
+	const uint2* ranges,
+	const uint32_t* point_list,
+	int W, int H,
+	const float2* means2D,
+	const float* colors,
+	const float4* conic_opacity,
+	float* final_T,
+	uint32_t* n_contrib,
+	const float* bg_color,
+	int* winner_count,
+	float* out_color)
+{
+	renderCUDA_count_contrib_max<NUM_CHANNELS> << <grid, block >> > (
+		ranges,
+		point_list,
+		W, H,
+		means2D,
+		colors,
+		conic_opacity,
+		final_T,
+		n_contrib,
+		bg_color,
+		out_color,
+		winner_count);
+}
+
 void FORWARD::count_gaussian_weighted_residual(
 	const dim3 grid, dim3 block,
 	const uint2* ranges,
