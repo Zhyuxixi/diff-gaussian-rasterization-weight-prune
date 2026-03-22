@@ -95,6 +95,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug,
+            raster_settings.render_mode,
         )
         gaussians_count, important_score, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = None, None, None, None, None, None, None, None
         # Invoke C++/CUDA rasterizer
@@ -259,6 +260,7 @@ class GaussianRasterizationSettings(NamedTuple):
     prefiltered : bool
     debug : bool
     f_count : bool
+    render_mode : int
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

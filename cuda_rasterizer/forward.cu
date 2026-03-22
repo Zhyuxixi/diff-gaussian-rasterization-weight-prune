@@ -17,6 +17,13 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
+namespace
+{
+	constexpr int RENDER_MODE_SPLAT = 0;
+	constexpr int RENDER_MODE_FLAT_BALL = 1;
+	constexpr int RENDER_MODE_GAUSSIAN_BALL = 2;
+}
+
 // Forward method for converting the input spherical harmonics
 // coefficients of each Gaussian to a simple RGB color.
 __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
@@ -272,7 +279,8 @@ renderCUDA(
 	float* __restrict__ final_T,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
-	float* __restrict__ out_color)
+	float* __restrict__ out_color,
+	int render_mode)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -345,22 +353,37 @@ renderCUDA(
 			float alpha = min(0.99f, con_o.w * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
-			float test_T = T * (1 - alpha);
-			if (test_T < 0.0001f)
+			float blend_alpha = alpha;
+			float color_scale = 1.0f;
+			if (render_mode == RENDER_MODE_FLAT_BALL || render_mode == RENDER_MODE_GAUSSIAN_BALL)
+			{
+				if (alpha <= 0.22f)
+					continue;
+				blend_alpha = 1.0f;
+				if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
+					color_scale = exp(power);
+			}
+			float test_T = T * (1 - blend_alpha);
+			bool terminate_after = test_T < 0.0001f;
+			if (terminate_after && render_mode == RENDER_MODE_SPLAT)
 			{
 				done = true;
 				continue;
 			}
+			if (terminate_after)
+				test_T = 0.0f;
 
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
-				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+				C[ch] += features[collected_id[j] * CHANNELS + ch] * color_scale * blend_alpha * T;
 
 			T = test_T;
 
 			// Keep track of last range entry to update this
 			// pixel.
 			last_contributor = contributor;
+			if (terminate_after)
+				done = true;
 		}
 	}
 
@@ -714,7 +737,8 @@ void FORWARD::render(
 	float* final_T,
 	uint32_t* n_contrib,
 	const float* bg_color,
-	float* out_color)
+	float* out_color,
+	int render_mode)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -726,7 +750,8 @@ void FORWARD::render(
 		final_T,
 		n_contrib,
 		bg_color,
-		out_color);
+		out_color,
+		render_mode);
 }
 
 void FORWARD::count_gaussian(

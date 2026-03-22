@@ -50,7 +50,8 @@ namespace CudaRasterizer
 			const bool prefiltered,
 			float* out_color,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			int render_mode = 0);
 
 		// overload forward with opacity-based importance (original LightGaussian)
 		static int forwardCount(
