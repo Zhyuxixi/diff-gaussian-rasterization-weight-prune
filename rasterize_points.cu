@@ -66,7 +66,9 @@ RasterizeGaussiansCUDA(
 	const bool debug,
 	const int render_mode,
 	const float contrib_threshold,
-	const int contrib_max_mode)
+	const int contrib_max_mode,
+	const int contrib_count_mode,
+	const float contrib_distance_scale)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -127,7 +129,9 @@ RasterizeGaussiansCUDA(
 		debug,
 		render_mode,
 		contrib_threshold,
-		contrib_max_mode);
+		contrib_max_mode,
+		contrib_count_mode,
+		contrib_distance_scale);
   }
 
   return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);

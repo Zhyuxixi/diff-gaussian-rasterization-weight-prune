@@ -41,6 +41,7 @@ namespace FORWARD
 		int* radii,
 		float2* points_xy_image,
 		float* depths,
+		float3* viewspace_points,
 		float* cov3Ds,
 		float* colors,
 		float4* conic_opacity,
@@ -55,6 +56,7 @@ namespace FORWARD
 		const uint32_t* point_list,
 		int W, int H,
 		const float2* points_xy_image,
+		const float3* viewspace_points,
 		const float* features,
 		const float4* conic_opacity,
 		float* final_T,
@@ -63,7 +65,9 @@ namespace FORWARD
 		float* out_color,
 		int render_mode,
 		float contrib_threshold,
-		int contrib_max_mode);
+		int contrib_max_mode,
+		int contrib_count_mode,
+		float contrib_distance_scale);
 
 	// Count gaussian with opacity-based importance score (original LightGaussian)
 	void count_gaussian(

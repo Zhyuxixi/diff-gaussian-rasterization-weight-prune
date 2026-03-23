@@ -26,8 +26,12 @@ namespace
 	constexpr int RENDER_MODE_CONTRIB_MAX = 4;
 	constexpr int CONTRIB_MAX_MODE_RATIO = 0;
 	constexpr int CONTRIB_MAX_MODE_COLOR = 1;
+	constexpr int CONTRIB_COUNT_MODE_COUNT = 0;
+	constexpr int CONTRIB_COUNT_MODE_WEIGHTED_ABS_MEAN = 1;
+	constexpr int CONTRIB_COUNT_MODE_WEIGHTED_VEC_MEAN = 2;
 	constexpr float CONTRIB_COUNT_VIS_MAX = 64.0f;
 	constexpr float CONTRIB_COUNT_VIS_LOG_DENOM = 4.17438727f; // log(65)
+	constexpr float CONTRIB_DISTANCE_VIS_LOG_DENOM = 4.61512052f; // log(101)
 }
 
 __device__ __forceinline__ float clamp01(float x)
@@ -44,6 +48,22 @@ __device__ __forceinline__ float3 lerpColor(const float3& a, const float3& b, fl
 	);
 }
 
+__device__ __forceinline__ float3 sequentialPalette(float normalized)
+{
+	const float3 stops[] = {
+		make_float3(0.051f, 0.051f, 0.149f),
+		make_float3(0.000f, 0.467f, 0.745f),
+		make_float3(0.180f, 0.800f, 0.443f),
+		make_float3(0.992f, 0.906f, 0.145f),
+		make_float3(0.843f, 0.188f, 0.153f),
+	};
+
+	float scaled = clamp01(normalized) * 4.0f;
+	int idx = min(3, max(0, static_cast<int>(floorf(scaled))));
+	float local_t = clamp01(scaled - static_cast<float>(idx));
+	return lerpColor(stops[idx], stops[idx + 1], local_t);
+}
+
 __device__ __forceinline__ float3 contribCountColor(uint32_t count)
 {
 	if (count == 0)
@@ -51,37 +71,27 @@ __device__ __forceinline__ float3 contribCountColor(uint32_t count)
 
 	float capped = fminf(static_cast<float>(count), CONTRIB_COUNT_VIS_MAX);
 	float normalized = clamp01(logf(1.0f + capped) / CONTRIB_COUNT_VIS_LOG_DENOM);
-
-	const float3 stops[] = {
-		make_float3(0.051f, 0.051f, 0.149f),
-		make_float3(0.000f, 0.467f, 0.745f),
-		make_float3(0.180f, 0.800f, 0.443f),
-		make_float3(0.992f, 0.906f, 0.145f),
-		make_float3(0.843f, 0.188f, 0.153f),
-	};
-
-	float scaled = normalized * 4.0f;
-	int idx = min(3, max(0, static_cast<int>(floorf(scaled))));
-	float local_t = clamp01(scaled - static_cast<float>(idx));
-	return lerpColor(stops[idx], stops[idx + 1], local_t);
+	return sequentialPalette(normalized);
 }
 
 __device__ __forceinline__ float3 contribMaxRatioColor(float ratio)
 {
-	float normalized = clamp01(ratio);
+	return sequentialPalette(clamp01(ratio));
+}
 
-	const float3 stops[] = {
-		make_float3(0.051f, 0.051f, 0.149f),
-		make_float3(0.000f, 0.467f, 0.745f),
-		make_float3(0.180f, 0.800f, 0.443f),
-		make_float3(0.992f, 0.906f, 0.145f),
-		make_float3(0.843f, 0.188f, 0.153f),
-	};
+__device__ __forceinline__ float3 contribSpreadColor(float distance_mean, float scene_diag)
+{
+	float safe_diag = fmaxf(scene_diag, 1e-6f);
+	float normalized = clamp01(logf(1.0f + 100.0f * fmaxf(distance_mean, 0.0f) / safe_diag) / CONTRIB_DISTANCE_VIS_LOG_DENOM);
+	return sequentialPalette(normalized);
+}
 
-	float scaled = normalized * 4.0f;
-	int idx = min(3, max(0, static_cast<int>(floorf(scaled))));
-	float local_t = clamp01(scaled - static_cast<float>(idx));
-	return lerpColor(stops[idx], stops[idx + 1], local_t);
+__device__ __forceinline__ float encodeSymmetricLog(float value, float scene_diag)
+{
+	float safe_diag = fmaxf(scene_diag, 1e-6f);
+	float magnitude = clamp01(logf(1.0f + 100.0f * fabsf(value) / safe_diag) / CONTRIB_DISTANCE_VIS_LOG_DENOM);
+	float signed_magnitude = copysignf(magnitude, value);
+	return clamp01(0.5f + 0.5f * signed_magnitude);
 }
 
 __device__ __forceinline__ bool evalStandardSplatAlpha(
@@ -257,6 +267,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,
+	float3* viewspace_points,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -333,6 +344,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
+	viewspace_points[idx] = p_view;
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
 	// Inverse 2D covariance and opacity neatly pack into one float4
@@ -350,6 +362,7 @@ renderCUDA(
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
 	const float2* __restrict__ points_xy_image,
+	const float3* __restrict__ viewspace_points,
 	const float* __restrict__ features,
 	const float4* __restrict__ conic_opacity,
 	float* __restrict__ final_T,
@@ -358,7 +371,9 @@ renderCUDA(
 	float* __restrict__ out_color,
 	int render_mode,
 	float contrib_threshold,
-	int contrib_max_mode)
+	int contrib_max_mode,
+	int contrib_count_mode,
+	float contrib_distance_scale)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -390,6 +405,10 @@ renderCUDA(
 	uint32_t last_contributor = 0;
 	uint32_t pixel_count = 0;
 	float C[CHANNELS] = { 0 };
+	bool contrib_has_metric = false;
+	float contrib_other_metric_sum = 0.0f;
+	float contrib_abs_mean = 0.0f;
+	float3 contrib_vec_mean = make_float3(0.0f, 0.0f, 0.0f);
 	if (render_mode == RENDER_MODE_CONTRIB_COUNT || render_mode == RENDER_MODE_CONTRIB_MAX)
 	{
 		float total_metric = 0.0f;
@@ -457,10 +476,14 @@ renderCUDA(
 		if (render_mode == RENDER_MODE_CONTRIB_COUNT)
 		{
 			bool has_metric = inside && total_metric > 0.0f;
+			contrib_has_metric = has_metric;
 			float prefix_metric = 0.0f;
 			float target_metric = clamped_threshold * total_metric;
 			float prefix_T = 1.0f;
 			bool prefix_done = !has_metric;
+			int winner_id = -1;
+			float winner_metric = -1.0f;
+			float3 winner_view_pos = make_float3(0.0f, 0.0f, 0.0f);
 			if (!has_metric)
 				pixel_count = 0;
 
@@ -496,6 +519,12 @@ renderCUDA(
 					) * alpha * prefix_T;
 
 					pixel_count++;
+					if (metric > winner_metric)
+					{
+						winner_metric = metric;
+						winner_id = collected_id[j];
+						winner_view_pos = viewspace_points[winner_id];
+					}
 					prefix_metric += metric;
 					if (prefix_metric >= target_metric)
 					{
@@ -510,6 +539,89 @@ renderCUDA(
 						break;
 					}
 					prefix_T = test_T;
+				}
+			}
+
+			if (has_metric && contrib_count_mode != CONTRIB_COUNT_MODE_COUNT && winner_id >= 0)
+			{
+				float other_prefix_metric = 0.0f;
+				float other_prefix_T = 1.0f;
+				bool other_done = false;
+				float weighted_abs_sum = 0.0f;
+				float3 weighted_vec_sum = make_float3(0.0f, 0.0f, 0.0f);
+
+				for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
+				{
+					int num_done = __syncthreads_count(other_done);
+					if (num_done == BLOCK_SIZE)
+						break;
+
+					int progress = i * BLOCK_SIZE + block.thread_rank();
+					if (range.x + progress < range.y)
+					{
+						int coll_id = point_list[range.x + progress];
+						collected_id[block.thread_rank()] = coll_id;
+						collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+						collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+					}
+					block.sync();
+
+					for (int j = 0; !other_done && j < min(BLOCK_SIZE, batch_to_do); j++)
+					{
+						float2 xy = collected_xy[j];
+						float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+						float alpha = 0.0f;
+						if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
+							continue;
+
+						int gaussian_id = collected_id[j];
+						int feature_base = gaussian_id * CHANNELS;
+						float metric = (
+							features[feature_base + 0] +
+							features[feature_base + 1] +
+							features[feature_base + 2]
+						) * alpha * other_prefix_T;
+
+						if (gaussian_id != winner_id)
+						{
+							float3 other_view_pos = viewspace_points[gaussian_id];
+							float3 delta = make_float3(
+								other_view_pos.x - winner_view_pos.x,
+								other_view_pos.y - winner_view_pos.y,
+								other_view_pos.z - winner_view_pos.z
+							);
+							contrib_other_metric_sum += metric;
+							weighted_abs_sum += metric * sqrtf(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+							weighted_vec_sum.x += metric * delta.x;
+							weighted_vec_sum.y += metric * delta.y;
+							weighted_vec_sum.z += metric * delta.z;
+						}
+
+						other_prefix_metric += metric;
+						if (other_prefix_metric >= target_metric)
+						{
+							other_done = true;
+							break;
+						}
+
+						float test_T = other_prefix_T * (1.0f - alpha);
+						if (test_T < 0.0001f)
+						{
+							other_done = true;
+							break;
+						}
+						other_prefix_T = test_T;
+					}
+				}
+
+				if (contrib_other_metric_sum > 0.0f)
+				{
+					contrib_abs_mean = weighted_abs_sum / contrib_other_metric_sum;
+					contrib_vec_mean = make_float3(
+						weighted_vec_sum.x / contrib_other_metric_sum,
+						weighted_vec_sum.y / contrib_other_metric_sum,
+						weighted_vec_sum.z / contrib_other_metric_sum
+					);
 				}
 			}
 		}
@@ -605,10 +717,40 @@ renderCUDA(
 		n_contrib[pix_id] = last_contributor;
 		if (render_mode == RENDER_MODE_CONTRIB_COUNT)
 		{
-			float3 count_color = contribCountColor(pixel_count);
-			out_color[0 * H * W + pix_id] = pixel_count > 0 ? count_color.x : bg_color[0];
-			out_color[1 * H * W + pix_id] = pixel_count > 0 ? count_color.y : bg_color[1];
-			out_color[2 * H * W + pix_id] = pixel_count > 0 ? count_color.z : bg_color[2];
+			if (!contrib_has_metric)
+			{
+				out_color[0 * H * W + pix_id] = bg_color[0];
+				out_color[1 * H * W + pix_id] = bg_color[1];
+				out_color[2 * H * W + pix_id] = bg_color[2];
+			}
+			else if (contrib_count_mode == CONTRIB_COUNT_MODE_WEIGHTED_ABS_MEAN)
+			{
+				float3 spread_color = contrib_other_metric_sum > 0.0f
+					? contribSpreadColor(contrib_abs_mean, contrib_distance_scale)
+					: sequentialPalette(0.0f);
+				out_color[0 * H * W + pix_id] = spread_color.x;
+				out_color[1 * H * W + pix_id] = spread_color.y;
+				out_color[2 * H * W + pix_id] = spread_color.z;
+			}
+			else if (contrib_count_mode == CONTRIB_COUNT_MODE_WEIGHTED_VEC_MEAN)
+			{
+				float3 offset_color = contrib_other_metric_sum > 0.0f
+					? make_float3(
+						encodeSymmetricLog(contrib_vec_mean.x, contrib_distance_scale),
+						encodeSymmetricLog(contrib_vec_mean.y, contrib_distance_scale),
+						encodeSymmetricLog(contrib_vec_mean.z, contrib_distance_scale))
+					: make_float3(0.5f, 0.5f, 0.5f);
+				out_color[0 * H * W + pix_id] = offset_color.x;
+				out_color[1 * H * W + pix_id] = offset_color.y;
+				out_color[2 * H * W + pix_id] = offset_color.z;
+			}
+			else
+			{
+				float3 count_color = contribCountColor(pixel_count);
+				out_color[0 * H * W + pix_id] = pixel_count > 0 ? count_color.x : bg_color[0];
+				out_color[1 * H * W + pix_id] = pixel_count > 0 ? count_color.y : bg_color[1];
+				out_color[2 * H * W + pix_id] = pixel_count > 0 ? count_color.z : bg_color[2];
+			}
 		}
 		else if (render_mode == RENDER_MODE_CONTRIB_MAX)
 		{
@@ -1062,6 +1204,7 @@ void FORWARD::render(
 	const uint32_t* point_list,
 	int W, int H,
 	const float2* means2D,
+	const float3* viewspace_points,
 	const float* colors,
 	const float4* conic_opacity,
 	float* final_T,
@@ -1070,13 +1213,16 @@ void FORWARD::render(
 	float* out_color,
 	int render_mode,
 	float contrib_threshold,
-	int contrib_max_mode)
+	int contrib_max_mode,
+	int contrib_count_mode,
+	float contrib_distance_scale)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
 		point_list,
 		W, H,
 		means2D,
+		viewspace_points,
 		colors,
 		conic_opacity,
 		final_T,
@@ -1085,7 +1231,9 @@ void FORWARD::render(
 		out_color,
 		render_mode,
 		contrib_threshold,
-		contrib_max_mode);
+		contrib_max_mode,
+		contrib_count_mode,
+		contrib_distance_scale);
 }
 
 void FORWARD::count_gaussian(
@@ -1233,6 +1381,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	int* radii,
 	float2* means2D,
 	float* depths,
+	float3* viewspace_points,
 	float* cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
@@ -1260,6 +1409,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		radii,
 		means2D,
 		depths,
+		viewspace_points,
 		cov3Ds,
 		rgb,
 		conic_opacity,

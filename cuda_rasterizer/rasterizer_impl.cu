@@ -159,6 +159,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	obtain(chunk, geom.clamped, P * 3, 128);
 	obtain(chunk, geom.internal_radii, P, 128);
 	obtain(chunk, geom.means2D, P, 128);
+	obtain(chunk, geom.viewspace_points, P, 128);
 	obtain(chunk, geom.cov3D, P * 6, 128);
 	obtain(chunk, geom.conic_opacity, P, 128);
 	obtain(chunk, geom.rgb, P * 3, 128);
@@ -220,7 +221,9 @@ int CudaRasterizer::Rasterizer::forward(
 	bool debug,
 	int render_mode,
 	float contrib_threshold,
-	int contrib_max_mode)
+	int contrib_max_mode,
+	int contrib_count_mode,
+	float contrib_distance_scale)
 
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -268,6 +271,7 @@ int CudaRasterizer::Rasterizer::forward(
 		radii,
 		geomState.means2D,
 		geomState.depths,
+		geomState.viewspace_points,
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
@@ -329,6 +333,7 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list,
 		width, height,
 		geomState.means2D,
+		geomState.viewspace_points,
 		feature_ptr,
 		geomState.conic_opacity,
 		imgState.accum_alpha,
@@ -337,7 +342,9 @@ int CudaRasterizer::Rasterizer::forward(
 		out_color,
 		render_mode,
 		contrib_threshold,
-		contrib_max_mode), debug)
+		contrib_max_mode,
+		contrib_count_mode,
+		contrib_distance_scale), debug)
 
 	return num_rendered;
 }
@@ -516,6 +523,7 @@ int CudaRasterizer::Rasterizer::forwardCount(
 		radii,
 		geomState.means2D,
 		geomState.depths,
+		geomState.viewspace_points,
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
@@ -657,6 +665,7 @@ int CudaRasterizer::Rasterizer::forwardCountContribMax(
 		radii,
 		geomState.means2D,
 		geomState.depths,
+		geomState.viewspace_points,
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
@@ -785,6 +794,7 @@ int CudaRasterizer::Rasterizer::forwardCountWeightedResidual(
 		radii,
 		geomState.means2D,
 		geomState.depths,
+		geomState.viewspace_points,
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,
@@ -935,6 +945,7 @@ int CudaRasterizer::Rasterizer::forwardCountWeighted(
 		radii,
 		geomState.means2D,
 		geomState.depths,
+		geomState.viewspace_points,
 		geomState.cov3D,
 		geomState.rgb,
 		geomState.conic_opacity,

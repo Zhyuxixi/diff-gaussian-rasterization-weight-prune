@@ -53,7 +53,9 @@ namespace CudaRasterizer
 			bool debug = false,
 			int render_mode = 0,
 			float contrib_threshold = 0.9f,
-			int contrib_max_mode = 0);
+			int contrib_max_mode = 0,
+			int contrib_count_mode = 0,
+			float contrib_distance_scale = 1.0f);
 
 		// overload forward with opacity-based importance (original LightGaussian)
 		static int forwardCount(
