@@ -67,7 +67,8 @@ namespace FORWARD
 		float contrib_threshold,
 		int contrib_max_mode,
 		int contrib_count_mode,
-		float contrib_distance_scale);
+		float contrib_distance_scale,
+		int max_gaussians_per_pixel);
 
 	// Count gaussian with opacity-based importance score (original LightGaussian)
 	void count_gaussian(
@@ -83,7 +84,8 @@ namespace FORWARD
 		const float* bg_color,
 		int* gaussians_count,
 		float* important_score,
-		float* out_color);
+		float* out_color,
+		int max_gaussians_per_pixel);
 
 	// Count gaussian with weighted importance score (alpha * T)
 	void count_gaussian_weighted(
@@ -100,7 +102,8 @@ namespace FORWARD
 		int* gaussians_count,
 		float* important_score,
 		float* weighted_important_score,
-		float* out_color);
+		float* out_color,
+		int max_gaussians_per_pixel);
 
 	void count_gaussian_contrib_max(
 		const dim3 grid, dim3 block,
@@ -114,7 +117,8 @@ namespace FORWARD
 		uint32_t* n_contrib,
 		const float* bg_color,
 		int* winner_count,
-		float* out_color);
+		float* out_color,
+		int max_gaussians_per_pixel);
 
 	void count_gaussian_area_max(
 		const dim3 grid, dim3 block,
@@ -128,7 +132,8 @@ namespace FORWARD
 		uint32_t* n_contrib,
 		const float* bg_color,
 		int* winner_count,
-		float* out_color);
+		float* out_color,
+		int max_gaussians_per_pixel);
 
 	// Count gaussian with weighted residual score (alpha * T * residual)
 	void count_gaussian_weighted_residual(
@@ -147,7 +152,8 @@ namespace FORWARD
 		float* important_score,
 		float* weighted_important_score,
 		float* weighted_residual_score,
-		float* out_color); 
+		float* out_color,
+		int max_gaussians_per_pixel); 
 }
 
 

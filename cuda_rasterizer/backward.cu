@@ -443,6 +443,10 @@ renderCUDA(
 
 	// We start from the back. The ID of the last contributing
 	// Gaussian is known from each pixel from the forward.
+	// Forward may stop early either because T is exhausted or because
+	// max_gaussians_per_pixel truncated the valid contributor prefix.
+	// Backward must therefore replay exactly the same forward-kept prefix
+	// via n_contrib[pix_id], instead of re-applying any independent cap.
 	uint32_t contributor = toDo;
 	const int last_contributor = inside ? n_contrib[pix_id] : 0;
 

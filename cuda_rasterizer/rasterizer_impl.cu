@@ -223,7 +223,8 @@ int CudaRasterizer::Rasterizer::forward(
 	float contrib_threshold,
 	int contrib_max_mode,
 	int contrib_count_mode,
-	float contrib_distance_scale)
+	float contrib_distance_scale,
+	int max_gaussians_per_pixel)
 
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -344,7 +345,8 @@ int CudaRasterizer::Rasterizer::forward(
 		contrib_threshold,
 		contrib_max_mode,
 		contrib_count_mode,
-		contrib_distance_scale), debug)
+		contrib_distance_scale,
+		max_gaussians_per_pixel), debug)
 
 	return num_rendered;
 }
@@ -380,7 +382,8 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
-	bool debug)
+	bool debug,
+	int max_gaussians_per_pixel)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
@@ -475,7 +478,8 @@ int CudaRasterizer::Rasterizer::forwardCount(
 	int* gaussians_count,
 	float* important_score,
 	int* radii,
-	bool debug)
+	bool debug,
+	int max_gaussians_per_pixel)
 
 {
 	const float focal_y = height / (2.0f * tan_fovy);
@@ -592,7 +596,8 @@ int CudaRasterizer::Rasterizer::forwardCount(
 		background,
 		gaussians_count,
 		important_score,
-		out_color), debug)
+		out_color,
+		max_gaussians_per_pixel), debug)
 
 	return num_rendered;
 }
@@ -620,7 +625,8 @@ int CudaRasterizer::Rasterizer::forwardCountContribMax(
 	float* out_color,
 	int* winner_count,
 	int* radii,
-	bool debug)
+	bool debug,
+	int max_gaussians_per_pixel)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
@@ -730,7 +736,8 @@ int CudaRasterizer::Rasterizer::forwardCountContribMax(
 		imgState.n_contrib,
 		background,
 		winner_count,
-		out_color), debug)
+		out_color,
+		max_gaussians_per_pixel), debug)
 
 	return num_rendered;
 }
@@ -758,7 +765,8 @@ int CudaRasterizer::Rasterizer::forwardCountAreaMax(
 	float* out_color,
 	int* winner_count,
 	int* radii,
-	bool debug)
+	bool debug,
+	int max_gaussians_per_pixel)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
@@ -868,7 +876,8 @@ int CudaRasterizer::Rasterizer::forwardCountAreaMax(
 		imgState.n_contrib,
 		background,
 		winner_count,
-		out_color), debug)
+		out_color,
+		max_gaussians_per_pixel), debug)
 
 	return num_rendered;
 }
@@ -901,7 +910,8 @@ int CudaRasterizer::Rasterizer::forwardCountWeightedResidual(
 	float* weighted_important_score,
 	float* weighted_residual_score,
 	int* radii,
-	bool debug)
+	bool debug,
+	int max_gaussians_per_pixel)
 {
 	const float focal_y = height / (2.0f * tan_fovy); const float focal_x = width / (2.0f * tan_fovx); size_t chunk_size = required<GeometryState>(P); char* chunkptr = geometryBuffer(chunk_size); GeometryState geomState = GeometryState::fromChunk(chunkptr, P); if (radii == nullptr)
 	{
@@ -1006,7 +1016,8 @@ int CudaRasterizer::Rasterizer::forwardCountWeightedResidual(
 		important_score,
 		weighted_important_score,
 		weighted_residual_score,
-		out_color), debug)
+		out_color,
+		max_gaussians_per_pixel), debug)
 
 	return num_rendered;}
 
@@ -1036,7 +1047,8 @@ int CudaRasterizer::Rasterizer::forwardCountWeighted(
 	float* important_score,
 	float* weighted_important_score,
 	int* radii,
-	bool debug)
+	bool debug,
+	int max_gaussians_per_pixel)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
@@ -1152,7 +1164,8 @@ int CudaRasterizer::Rasterizer::forwardCountWeighted(
 		gaussians_count,
 		important_score,
 		weighted_important_score,
-		out_color), debug)
+		out_color,
+		max_gaussians_per_pixel), debug)
 
 	return num_rendered;
 }

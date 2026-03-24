@@ -381,7 +381,8 @@ renderCUDA(
 	float contrib_threshold,
 	int contrib_max_mode,
 	int contrib_count_mode,
-	float contrib_distance_scale)
+	float contrib_distance_scale,
+	int max_gaussians_per_pixel)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -411,6 +412,7 @@ renderCUDA(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
+	uint32_t valid_contributor_count = 0;
 	uint32_t pixel_count = 0;
 	float C[CHANNELS] = { 0 };
 	bool contrib_has_metric = false;
@@ -452,6 +454,10 @@ renderCUDA(
 				if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
 					continue;
 
+				valid_contributor_count++;
+				bool reached_cap = max_gaussians_per_pixel > 0
+					&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
+
 				if (render_mode == RENDER_MODE_CONTRIB_MAX && nearest_valid_id < 0)
 					nearest_valid_id = collected_id[j];
 
@@ -484,6 +490,11 @@ renderCUDA(
 
 				T = test_T;
 				last_contributor = contributor;
+				if (reached_cap)
+				{
+					done = true;
+					break;
+				}
 			}
 		}
 
@@ -495,6 +506,7 @@ renderCUDA(
 			float target_metric = clamped_threshold * total_metric;
 			float prefix_T = 1.0f;
 			bool prefix_done = !has_metric;
+			uint32_t prefix_valid_contributor_count = 0;
 			int winner_id = -1;
 			float winner_metric = -1.0f;
 			float3 winner_view_pos = make_float3(0.0f, 0.0f, 0.0f);
@@ -524,6 +536,9 @@ renderCUDA(
 					float alpha = 0.0f;
 					if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
 						continue;
+					prefix_valid_contributor_count++;
+					bool reached_cap = max_gaussians_per_pixel > 0
+						&& prefix_valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 
 					int feature_base = collected_id[j] * CHANNELS;
 					float metric = (
@@ -553,6 +568,11 @@ renderCUDA(
 						break;
 					}
 					prefix_T = test_T;
+					if (reached_cap)
+					{
+						prefix_done = true;
+						break;
+					}
 				}
 			}
 
@@ -561,6 +581,7 @@ renderCUDA(
 				float other_prefix_metric = 0.0f;
 				float other_prefix_T = 1.0f;
 				bool other_done = false;
+				uint32_t other_valid_contributor_count = 0;
 				float weighted_abs_sum = 0.0f;
 				float3 weighted_vec_sum = make_float3(0.0f, 0.0f, 0.0f);
 
@@ -587,6 +608,9 @@ renderCUDA(
 						float alpha = 0.0f;
 						if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
 							continue;
+						other_valid_contributor_count++;
+						bool reached_cap = max_gaussians_per_pixel > 0
+							&& other_valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 
 						int gaussian_id = collected_id[j];
 						int feature_base = gaussian_id * CHANNELS;
@@ -625,6 +649,11 @@ renderCUDA(
 							break;
 						}
 						other_prefix_T = test_T;
+						if (reached_cap)
+						{
+							other_done = true;
+							break;
+						}
 					}
 				}
 
@@ -707,6 +736,9 @@ renderCUDA(
 					if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
 						color_scale = exp(power);
 				}
+				valid_contributor_count++;
+				bool reached_cap = max_gaussians_per_pixel > 0
+					&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 
 				float test_T = T * (1 - blend_alpha);
 				bool terminate_after = test_T < 0.0001f;
@@ -724,7 +756,7 @@ renderCUDA(
 
 				T = test_T;
 				last_contributor = contributor;
-				if (terminate_after)
+				if (terminate_after || reached_cap)
 					done = true;
 			}
 		}
@@ -802,7 +834,8 @@ renderCUDA_count(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	int* __restrict__ gaussian_count,
-	float* __restrict__ important_score)
+	float* __restrict__ important_score,
+	int max_gaussians_per_pixel)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -832,6 +865,7 @@ renderCUDA_count(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
+	uint32_t valid_contributor_count = 0;
 	float C[CHANNELS] = { 0 };
 
 	// Iterate over batches until all done or range is complete
@@ -877,6 +911,9 @@ renderCUDA_count(
 			float alpha = min(0.99f, con_o.w * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
+			valid_contributor_count++;
+			bool reached_cap = max_gaussians_per_pixel > 0
+				&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 			float test_T = T * (1 - alpha);
 			if (test_T < 0.0001f)
 			{
@@ -899,6 +936,11 @@ renderCUDA_count(
 			// Keep track of last range entry to update this
 			// pixel.
 			last_contributor = contributor;
+			if (reached_cap)
+			{
+				done = true;
+				break;
+			}
 		}
 	}
 
@@ -929,7 +971,8 @@ renderCUDA_count_weighted(
 	float* __restrict__ out_color,
 	int* __restrict__ gaussian_count,
 	float* __restrict__ important_score,
-	float* __restrict__ weighted_important_score)
+	float* __restrict__ weighted_important_score,
+	int max_gaussians_per_pixel)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -959,6 +1002,7 @@ renderCUDA_count_weighted(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
+	uint32_t valid_contributor_count = 0;
 	float C[CHANNELS] = { 0 };
 
 	// Iterate over batches until all done or range is complete
@@ -1002,6 +1046,9 @@ renderCUDA_count_weighted(
 			float alpha = min(0.99f, con_o.w * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
+			valid_contributor_count++;
+			bool reached_cap = max_gaussians_per_pixel > 0
+				&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 			float test_T = T * (1 - alpha);
 			if (test_T < 0.0001f)
 			{
@@ -1023,6 +1070,11 @@ renderCUDA_count_weighted(
 			// Keep track of last range entry to update this
 			// pixel.
 			last_contributor = contributor;
+			if (reached_cap)
+			{
+				done = true;
+				break;
+			}
 		}
 	}
 
@@ -1050,7 +1102,8 @@ renderCUDA_count_contrib_max(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	int* __restrict__ winner_count)
+	int* __restrict__ winner_count,
+	int max_gaussians_per_pixel)
 {
 	auto block = cg::this_thread_block();
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
@@ -1074,6 +1127,7 @@ renderCUDA_count_contrib_max(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
+	uint32_t valid_contributor_count = 0;
 	float max_metric = 0.0f;
 	int max_id = -1;
 
@@ -1102,6 +1156,9 @@ renderCUDA_count_contrib_max(
 			float alpha = 0.0f;
 			if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
 				continue;
+			valid_contributor_count++;
+			bool reached_cap = max_gaussians_per_pixel > 0
+				&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 
 			int feature_base = collected_id[j] * CHANNELS;
 			float metric = (
@@ -1126,6 +1183,11 @@ renderCUDA_count_contrib_max(
 
 			T = test_T;
 			last_contributor = contributor;
+			if (reached_cap)
+			{
+				done = true;
+				break;
+			}
 		}
 	}
 
@@ -1153,7 +1215,8 @@ renderCUDA_count_area_max(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	int* __restrict__ winner_count)
+	int* __restrict__ winner_count,
+	int max_gaussians_per_pixel)
 {
 	auto block = cg::this_thread_block();
 	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
@@ -1177,6 +1240,7 @@ renderCUDA_count_area_max(
 	float T = 1.0f;
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
+	uint32_t valid_contributor_count = 0;
 	float max_metric = 0.0f;
 	int max_id = -1;
 
@@ -1205,6 +1269,9 @@ renderCUDA_count_area_max(
 			float alpha = 0.0f;
 			if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
 				continue;
+			valid_contributor_count++;
+			bool reached_cap = max_gaussians_per_pixel > 0
+				&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 
 			float metric = alpha * T;
 			if (metric > max_metric)
@@ -1224,6 +1291,11 @@ renderCUDA_count_area_max(
 
 			T = test_T;
 			last_contributor = contributor;
+			if (reached_cap)
+			{
+				done = true;
+				break;
+			}
 		}
 	}
 
@@ -1258,7 +1330,8 @@ renderCUDA_count_weighted_residual(
 	int* __restrict__ gaussian_count,
 	float* __restrict__ important_score,
 	float* __restrict__ weighted_important_score,
-	float* __restrict__ weighted_residual_score)
+	float* __restrict__ weighted_residual_score,
+	int max_gaussians_per_pixel)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;	uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y, H) };	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };	uint32_t pix_id = W * pix.y + pix.x;	float2 pixf = { (float)pix.x, (float)pix.y }; 
@@ -1270,7 +1343,7 @@ renderCUDA_count_weighted_residual(
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];	__shared__ float2 collected_xy[BLOCK_SIZE];	__shared__ float4 collected_conic_opacity[BLOCK_SIZE]; 
 	// Initialize helper variables
-	float T = 1.0f;	uint32_t contributor = 0;	uint32_t last_contributor = 0;	float C[CHANNELS] = { 0 };	const float residual = inside ? residual_map[pix_id] : 0.0f; 
+	float T = 1.0f;	uint32_t contributor = 0;	uint32_t last_contributor = 0;	uint32_t valid_contributor_count = 0;	float C[CHANNELS] = { 0 };	const float residual = inside ? residual_map[pix_id] : 0.0f; 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
 	{
@@ -1294,7 +1367,7 @@ renderCUDA_count_weighted_residual(
 			// and its exponential falloff from mean.
 			// Avoid numerical instabilities (see paper appendix).
 			float alpha = min(0.99f, con_o.w * exp(power));			if (alpha < 1.0f / 255.0f)
-				continue;			float test_T = T * (1 - alpha);			if (test_T < 0.0001f)
+				continue;			valid_contributor_count++;			bool reached_cap = max_gaussians_per_pixel > 0 && valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);			float test_T = T * (1 - alpha);			if (test_T < 0.0001f)
 			{
 				done = true;				continue;			}
 
@@ -1306,7 +1379,9 @@ renderCUDA_count_weighted_residual(
 			T = test_T; 
 			// Keep track of last range entry to update this
 			// pixel.
-			last_contributor = contributor;		} 
+			last_contributor = contributor;			if (reached_cap)
+			{
+				done = true;				break;			}		} 
 	}
 
 	// All threads that treat valid pixel write out their final
@@ -1334,7 +1409,8 @@ void FORWARD::render(
 	float contrib_threshold,
 	int contrib_max_mode,
 	int contrib_count_mode,
-	float contrib_distance_scale)
+	float contrib_distance_scale,
+	int max_gaussians_per_pixel)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -1352,7 +1428,8 @@ void FORWARD::render(
 		contrib_threshold,
 		contrib_max_mode,
 		contrib_count_mode,
-		contrib_distance_scale);
+		contrib_distance_scale,
+		max_gaussians_per_pixel);
 }
 
 void FORWARD::count_gaussian(
@@ -1368,7 +1445,8 @@ void FORWARD::count_gaussian(
 	const float* bg_color,
 	int* gaussians_count,
 	float* important_score,
-	float* out_color)
+	float* out_color,
+	int max_gaussians_per_pixel)
 {
 	renderCUDA_count<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -1382,7 +1460,8 @@ void FORWARD::count_gaussian(
 		bg_color,
 		out_color,
 		gaussians_count,
-		important_score);
+		important_score,
+		max_gaussians_per_pixel);
 }
 
 void FORWARD::count_gaussian_weighted(
@@ -1399,7 +1478,8 @@ void FORWARD::count_gaussian_weighted(
 	int* gaussians_count,
 	float* important_score,
 	float* weighted_important_score,
-	float* out_color)
+	float* out_color,
+	int max_gaussians_per_pixel)
 {
 	renderCUDA_count_weighted<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -1414,7 +1494,8 @@ void FORWARD::count_gaussian_weighted(
 		out_color,
 		gaussians_count,
 		important_score,
-		weighted_important_score);
+		weighted_important_score,
+		max_gaussians_per_pixel);
 }
 
 void FORWARD::count_gaussian_contrib_max(
@@ -1429,7 +1510,8 @@ void FORWARD::count_gaussian_contrib_max(
 	uint32_t* n_contrib,
 	const float* bg_color,
 	int* winner_count,
-	float* out_color)
+	float* out_color,
+	int max_gaussians_per_pixel)
 {
 	renderCUDA_count_contrib_max<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -1442,7 +1524,8 @@ void FORWARD::count_gaussian_contrib_max(
 		n_contrib,
 		bg_color,
 		out_color,
-		winner_count);
+		winner_count,
+		max_gaussians_per_pixel);
 }
 
 void FORWARD::count_gaussian_area_max(
@@ -1457,7 +1540,8 @@ void FORWARD::count_gaussian_area_max(
 	uint32_t* n_contrib,
 	const float* bg_color,
 	int* winner_count,
-	float* out_color)
+	float* out_color,
+	int max_gaussians_per_pixel)
 {
 	renderCUDA_count_area_max<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -1470,7 +1554,8 @@ void FORWARD::count_gaussian_area_max(
 		n_contrib,
 		bg_color,
 		out_color,
-		winner_count);
+		winner_count,
+		max_gaussians_per_pixel);
 }
 
 void FORWARD::count_gaussian_weighted_residual(
@@ -1489,7 +1574,8 @@ void FORWARD::count_gaussian_weighted_residual(
 	float* important_score,
 	float* weighted_important_score,
 	float* weighted_residual_score,
-	float* out_color)
+	float* out_color,
+	int max_gaussians_per_pixel)
 {
 	renderCUDA_count_weighted_residual<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -1506,7 +1592,8 @@ void FORWARD::count_gaussian_weighted_residual(
 		gaussians_count,
 		important_score,
 		weighted_important_score,
-		weighted_residual_score); }
+		weighted_residual_score,
+		max_gaussians_per_pixel); }
 
 
 void FORWARD::preprocess(int P, int D, int M,

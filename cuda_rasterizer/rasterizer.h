@@ -55,7 +55,8 @@ namespace CudaRasterizer
 			float contrib_threshold = 0.9f,
 			int contrib_max_mode = 0,
 			int contrib_count_mode = 0,
-			float contrib_distance_scale = 1.0f);
+			float contrib_distance_scale = 1.0f,
+			int max_gaussians_per_pixel = 0);
 
 		// overload forward with opacity-based importance (original LightGaussian)
 		static int forwardCount(
@@ -82,7 +83,8 @@ namespace CudaRasterizer
 			int* gaussians_count,
 			float* important_score,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			int max_gaussians_per_pixel = 0);
 
 		// overload forward with weighted importance (alpha * T)
 		static int forwardCountWeighted(
@@ -110,7 +112,8 @@ namespace CudaRasterizer
 			float* important_score,
 			float* weighted_important_score,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			int max_gaussians_per_pixel = 0);
 
 		static int forwardCountContribMax(
 			std::function<char* (size_t)> geometryBuffer,
@@ -135,7 +138,8 @@ namespace CudaRasterizer
 			float* out_color,
 			int* winner_count,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			int max_gaussians_per_pixel = 0);
 
 		static int forwardCountAreaMax(
 			std::function<char* (size_t)> geometryBuffer,
@@ -160,7 +164,8 @@ namespace CudaRasterizer
 			float* out_color,
 			int* winner_count,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			int max_gaussians_per_pixel = 0);
 
 		static int forwardCountWeightedResidual(
 			std::function<char* (size_t)> geometryBuffer,
@@ -189,7 +194,8 @@ namespace CudaRasterizer
 			float* weighted_important_score,
 			float* weighted_residual_score,
 			int* radii = nullptr,
-			bool debug = false); 
+			bool debug = false,
+			int max_gaussians_per_pixel = 0); 
 		static void backward(
 			const int P, int D, int M, int R,
 			const float* background,
@@ -219,7 +225,8 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
-			bool debug);
+			bool debug,
+			int max_gaussians_per_pixel = 0);
 	};
 };
 

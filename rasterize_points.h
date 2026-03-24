@@ -40,7 +40,8 @@ RasterizeGaussiansCUDA(
 	const float contrib_threshold,
 	const int contrib_max_mode,
 	const int contrib_count_mode,
-	const float contrib_distance_scale);
+	const float contrib_distance_scale,
+	const int max_gaussians_per_pixel);
 
 std::tuple<torch::Tensor, torch::Tensor, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 CountGaussiansCUDA(
@@ -63,7 +64,8 @@ CountGaussiansCUDA(
 	const torch::Tensor& campos,
 	const bool prefiltered,
 	const bool debug,
-	const bool f_count);
+	const bool f_count,
+	const int max_gaussians_per_pixel);
 
 std::tuple<torch::Tensor, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 CountGaussiansContribMaxCUDA(
@@ -85,7 +87,8 @@ CountGaussiansContribMaxCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
-	const bool debug);
+	const bool debug,
+	const int max_gaussians_per_pixel);
 
 std::tuple<torch::Tensor, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 CountGaussiansAreaMaxCUDA(
@@ -107,7 +110,8 @@ CountGaussiansAreaMaxCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
-	const bool debug);
+	const bool debug,
+	const int max_gaussians_per_pixel);
 
 // New: Count with weighted importance score (alpha * T)
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -130,7 +134,8 @@ CountGaussiansWeightedCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
-	const bool debug);
+	const bool debug,
+	const int max_gaussians_per_pixel);
 
 // New: Count with weighted residual score (alpha * T * residual)
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -154,7 +159,8 @@ CountGaussiansWeightedResidualCUDA(
 	const torch::Tensor& campos,
 	const torch::Tensor& residual_map,
 	const bool prefiltered,
-	const bool debug); 
+	const bool debug,
+	const int max_gaussians_per_pixel); 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
@@ -177,7 +183,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const int R,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
-	const bool debug);
+	const bool debug,
+	const int max_gaussians_per_pixel);
 
 torch::Tensor markVisible(
 		torch::Tensor& means3D,

@@ -68,7 +68,8 @@ RasterizeGaussiansCUDA(
 	const float contrib_threshold,
 	const int contrib_max_mode,
 	const int contrib_count_mode,
-	const float contrib_distance_scale)
+	const float contrib_distance_scale,
+	const int max_gaussians_per_pixel)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -131,7 +132,8 @@ RasterizeGaussiansCUDA(
 		contrib_threshold,
 		contrib_max_mode,
 		contrib_count_mode,
-		contrib_distance_scale);
+		contrib_distance_scale,
+		max_gaussians_per_pixel);
   }
 
   return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
@@ -159,7 +161,8 @@ CountGaussiansCUDA(
 	const torch::Tensor& campos,
 	const bool prefiltered,
 	const bool debug,
-	const bool f_count)
+	const bool f_count,
+	const int max_gaussians_per_pixel)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -221,7 +224,8 @@ CountGaussiansCUDA(
 		gaussians_count.contiguous().data<int>(),
 		important_score.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
-		debug);
+		debug,
+		max_gaussians_per_pixel);
   }
   return std::make_tuple(gaussians_count, important_score, rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
 }
@@ -246,7 +250,8 @@ CountGaussiansContribMaxCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
-	const bool debug)
+	const bool debug,
+	const int max_gaussians_per_pixel)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -302,7 +307,8 @@ CountGaussiansContribMaxCUDA(
 		out_color.contiguous().data<float>(),
 		winner_count.contiguous().data<int>(),
 		radii.contiguous().data<int>(),
-		debug);
+		debug,
+		max_gaussians_per_pixel);
   }
   return std::make_tuple(winner_count, rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
 }
@@ -327,7 +333,8 @@ CountGaussiansAreaMaxCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
-	const bool debug)
+	const bool debug,
+	const int max_gaussians_per_pixel)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -383,7 +390,8 @@ CountGaussiansAreaMaxCUDA(
 		out_color.contiguous().data<float>(),
 		winner_count.contiguous().data<int>(),
 		radii.contiguous().data<int>(),
-		debug);
+		debug,
+		max_gaussians_per_pixel);
   }
   return std::make_tuple(winner_count, rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
 }
@@ -409,7 +417,8 @@ CountGaussiansWeightedCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
-	const bool debug)
+	const bool debug,
+	const int max_gaussians_per_pixel)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -473,7 +482,8 @@ CountGaussiansWeightedCUDA(
 		important_score.contiguous().data<float>(),
 		weighted_important_score.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
-		debug);
+		debug,
+		max_gaussians_per_pixel);
   }
   return std::make_tuple(gaussians_count, important_score, weighted_important_score, rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
 }
@@ -501,7 +511,8 @@ CountGaussiansWeightedResidualCUDA(
 	const torch::Tensor& campos,
 	const torch::Tensor& residual_map,
 	const bool prefiltered,
-	const bool debug)
+	const bool debug,
+	const int max_gaussians_per_pixel)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)"); }
@@ -543,7 +554,8 @@ CountGaussiansWeightedResidualCUDA(
 		weighted_important_score.contiguous().data<float>(),
 		weighted_residual_score.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
-		debug);  }
+		debug,
+		max_gaussians_per_pixel);  }
   return std::make_tuple(gaussians_count, important_score, weighted_important_score, weighted_residual_score, rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer); }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -568,7 +580,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const int R,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
-	const bool debug) 
+	const bool debug,
+	const int max_gaussians_per_pixel) 
 {
   const int P = means3D.size(0);
   const int H = dL_dout_color.size(1);
@@ -621,7 +634,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dsh.contiguous().data<float>(),
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
-	  debug);
+	  debug,
+	  max_gaussians_per_pixel);
   }
 
   return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations);

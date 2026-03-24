@@ -100,6 +100,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.contrib_max_mode,
             raster_settings.contrib_count_mode,
             raster_settings.contrib_distance_scale,
+            raster_settings.max_gaussians_per_pixel,
         )
         gaussians_count, important_score, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = None, None, None, None, None, None, None, None
         # Invoke C++/CUDA rasterizer
@@ -175,7 +176,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug,
-            raster_settings.f_count
+            raster_settings.f_count,
+            raster_settings.max_gaussians_per_pixel,
         )
         # gaussians_count, important_score, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = None, None, None, None, None, None, None, None
         # Invoke C++/CUDA rasterizer
@@ -222,7 +224,8 @@ class _RasterizeGaussians(torch.autograd.Function):
                 num_rendered,
                 binningBuffer,
                 imgBuffer,
-                raster_settings.debug)
+                raster_settings.debug,
+                raster_settings.max_gaussians_per_pixel)
 
         # Compute gradients for relevant tensors by invoking backward method
         if raster_settings.debug:
@@ -269,6 +272,7 @@ class GaussianRasterizationSettings(NamedTuple):
     contrib_max_mode : int
     contrib_count_mode : int
     contrib_distance_scale : float
+    max_gaussians_per_pixel : int
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):
@@ -401,6 +405,7 @@ class GaussianRasterizer(nn.Module):
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug,
+            raster_settings.max_gaussians_per_pixel,
         )
 
         if raster_settings.debug:
@@ -461,6 +466,7 @@ class GaussianRasterizer(nn.Module):
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug,
+            raster_settings.max_gaussians_per_pixel,
         )
 
         if raster_settings.debug:
@@ -521,6 +527,7 @@ class GaussianRasterizer(nn.Module):
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug,
+            raster_settings.max_gaussians_per_pixel,
         )
 
         if raster_settings.debug:
@@ -597,6 +604,7 @@ class GaussianRasterizer(nn.Module):
             residual_map,
             raster_settings.prefiltered,
             raster_settings.debug,
+            raster_settings.max_gaussians_per_pixel,
         )
 
         if raster_settings.debug:
