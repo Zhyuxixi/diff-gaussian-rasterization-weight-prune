@@ -116,6 +116,20 @@ namespace FORWARD
 		int* winner_count,
 		float* out_color);
 
+	void count_gaussian_area_max(
+		const dim3 grid, dim3 block,
+		const uint2* ranges,
+		const uint32_t* point_list,
+		int W, int H,
+		const float2* points_xy_image,
+		const float* features,
+		const float4* conic_opacity,
+		float* final_T,
+		uint32_t* n_contrib,
+		const float* bg_color,
+		int* winner_count,
+		float* out_color);
+
 	// Count gaussian with weighted residual score (alpha * T * residual)
 	void count_gaussian_weighted_residual(
 		const dim3 grid, dim3 block,

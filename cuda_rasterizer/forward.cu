@@ -26,6 +26,7 @@ namespace
 	constexpr int RENDER_MODE_CONTRIB_MAX = 4;
 	constexpr int CONTRIB_MAX_MODE_RATIO = 0;
 	constexpr int CONTRIB_MAX_MODE_COLOR = 1;
+	constexpr int CONTRIB_MAX_MODE_NEAREST_HIT = 2;
 	constexpr int CONTRIB_COUNT_MODE_COUNT = 0;
 	constexpr int CONTRIB_COUNT_MODE_WEIGHTED_ABS_MEAN = 1;
 	constexpr int CONTRIB_COUNT_MODE_WEIGHTED_VEC_MEAN = 2;
@@ -77,6 +78,13 @@ __device__ __forceinline__ float3 contribCountColor(uint32_t count)
 __device__ __forceinline__ float3 contribMaxRatioColor(float ratio)
 {
 	return sequentialPalette(clamp01(ratio));
+}
+
+__device__ __forceinline__ float3 contribMaxNearestColor(bool is_hit)
+{
+	return is_hit
+		? make_float3(0.180f, 0.800f, 0.443f)
+		: make_float3(0.843f, 0.188f, 0.153f);
 }
 
 __device__ __forceinline__ float3 contribSpreadColor(float distance_mean, float scene_diag)
@@ -414,6 +422,8 @@ renderCUDA(
 		float total_metric = 0.0f;
 		float clamped_threshold = fminf(0.99f, fmaxf(0.5f, contrib_threshold));
 		float max_metric = 0.0f;
+		int max_id = -1;
+		int nearest_valid_id = -1;
 		float3 max_contrib_color = make_float3(0.0f, 0.0f, 0.0f);
 
 		for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
@@ -442,6 +452,9 @@ renderCUDA(
 				if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
 					continue;
 
+				if (render_mode == RENDER_MODE_CONTRIB_MAX && nearest_valid_id < 0)
+					nearest_valid_id = collected_id[j];
+
 				int feature_base = collected_id[j] * CHANNELS;
 				float metric = (
 					features[feature_base + 0] +
@@ -452,6 +465,7 @@ renderCUDA(
 				if (render_mode == RENDER_MODE_CONTRIB_MAX && metric > max_metric)
 				{
 					max_metric = metric;
+					max_id = collected_id[j];
 					max_contrib_color = make_float3(
 						features[feature_base + 0] * alpha * T,
 						features[feature_base + 1] * alpha * T,
@@ -632,6 +646,13 @@ renderCUDA(
 				C[0] = max_contrib_color.x;
 				C[1] = max_contrib_color.y;
 				C[2] = max_contrib_color.z;
+			}
+			else if (contrib_max_mode == CONTRIB_MAX_MODE_NEAREST_HIT)
+			{
+				const float3 hit_color = contribMaxNearestColor(max_id >= 0 && nearest_valid_id >= 0 && max_id == nearest_valid_id);
+				C[0] = hit_color.x;
+				C[1] = hit_color.y;
+				C[2] = hit_color.z;
 			}
 			else
 			{
@@ -1119,6 +1140,104 @@ renderCUDA_count_contrib_max(
 	}
 }
 
+template <uint32_t CHANNELS>
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+renderCUDA_count_area_max(
+	const uint2* __restrict__ ranges,
+	const uint32_t* __restrict__ point_list,
+	int W, int H,
+	const float2* __restrict__ points_xy_image,
+	const float* __restrict__ features,
+	const float4* __restrict__ conic_opacity,
+	float* __restrict__ final_T,
+	uint32_t* __restrict__ n_contrib,
+	const float* __restrict__ bg_color,
+	float* __restrict__ out_color,
+	int* __restrict__ winner_count)
+{
+	auto block = cg::this_thread_block();
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
+	uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
+	uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y, H) };
+	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
+	uint32_t pix_id = W * pix.y + pix.x;
+	float2 pixf = { (float)pix.x, (float)pix.y };
+
+	bool inside = pix.x < W && pix.y < H;
+	bool done = !inside;
+
+	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
+	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
+	int toDo = range.y - range.x;
+
+	__shared__ int collected_id[BLOCK_SIZE];
+	__shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+
+	float T = 1.0f;
+	uint32_t contributor = 0;
+	uint32_t last_contributor = 0;
+	float max_metric = 0.0f;
+	int max_id = -1;
+
+	for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
+	{
+		int num_done = __syncthreads_count(done);
+		if (num_done == BLOCK_SIZE)
+			break;
+
+		int progress = i * BLOCK_SIZE + block.thread_rank();
+		if (range.x + progress < range.y)
+		{
+			int coll_id = point_list[range.x + progress];
+			collected_id[block.thread_rank()] = coll_id;
+			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+		}
+		block.sync();
+
+		for (int j = 0; !done && j < min(BLOCK_SIZE, batch_to_do); j++)
+		{
+			contributor++;
+
+			float2 xy = collected_xy[j];
+			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+			float alpha = 0.0f;
+			if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
+				continue;
+
+			float metric = alpha * T;
+			if (metric > max_metric)
+			{
+				max_metric = metric;
+				max_id = collected_id[j];
+			}
+
+			float test_T = T * (1.0f - alpha);
+			if (test_T < 0.0001f)
+			{
+				T = 0.0f;
+				last_contributor = contributor;
+				done = true;
+				break;
+			}
+
+			T = test_T;
+			last_contributor = contributor;
+		}
+	}
+
+	if (inside)
+	{
+		final_T[pix_id] = T;
+		n_contrib[pix_id] = last_contributor;
+		if (max_id >= 0)
+			atomicAdd(&winner_count[max_id], 1);
+		for (int ch = 0; ch < CHANNELS; ch++)
+			out_color[ch * H * W + pix_id] = bg_color[ch];
+	}
+}
+
 
 
 // New kernel: count with weighted residual score (alpha * T * residual)
@@ -1313,6 +1432,34 @@ void FORWARD::count_gaussian_contrib_max(
 	float* out_color)
 {
 	renderCUDA_count_contrib_max<NUM_CHANNELS> << <grid, block >> > (
+		ranges,
+		point_list,
+		W, H,
+		means2D,
+		colors,
+		conic_opacity,
+		final_T,
+		n_contrib,
+		bg_color,
+		out_color,
+		winner_count);
+}
+
+void FORWARD::count_gaussian_area_max(
+	const dim3 grid, dim3 block,
+	const uint2* ranges,
+	const uint32_t* point_list,
+	int W, int H,
+	const float2* means2D,
+	const float* colors,
+	const float4* conic_opacity,
+	float* final_T,
+	uint32_t* n_contrib,
+	const float* bg_color,
+	int* winner_count,
+	float* out_color)
+{
+	renderCUDA_count_area_max<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
 		point_list,
 		W, H,

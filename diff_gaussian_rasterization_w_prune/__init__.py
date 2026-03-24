@@ -476,6 +476,66 @@ class GaussianRasterizer(nn.Module):
 
         return winner_count, color, radii
 
+    def forward_count_area_max(self, means3D, means2D, opacities, shs=None, colors_precomp=None, scales=None, rotations=None, cov3D_precomp=None):
+        """
+        Forward pass with area-max winner counting (winner by alpha * T).
+        Returns: winner_count, color, radii
+        """
+        raster_settings = self.raster_settings
+
+        if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
+            raise Exception('Please provide excatly one of either SHs or precomputed colors!')
+
+        if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
+            raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
+
+        if shs is None:
+            shs = torch.Tensor([])
+        if colors_precomp is None:
+            colors_precomp = torch.Tensor([])
+
+        if scales is None:
+            scales = torch.Tensor([])
+        if rotations is None:
+            rotations = torch.Tensor([])
+        if cov3D_precomp is None:
+            cov3D_precomp = torch.Tensor([])
+
+        args = (
+            raster_settings.bg,
+            means3D,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            raster_settings.scale_modifier,
+            cov3D_precomp,
+            raster_settings.viewmatrix,
+            raster_settings.projmatrix,
+            raster_settings.tanfovx,
+            raster_settings.tanfovy,
+            raster_settings.image_height,
+            raster_settings.image_width,
+            shs,
+            raster_settings.sh_degree,
+            raster_settings.campos,
+            raster_settings.prefiltered,
+            raster_settings.debug,
+        )
+
+        if raster_settings.debug:
+            cpu_args = cpu_deep_copy_tuple(args)
+            try:
+                winner_count, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = _C.count_gaussians_area_max(*args)
+            except Exception as ex:
+                torch.save(cpu_args, "snapshot_fw_area_max.dump")
+                print("\nAn error occured in forward_count_area_max. Please forward snapshot_fw_area_max.dump for debugging.")
+                raise ex
+        else:
+            winner_count, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = _C.count_gaussians_area_max(*args)
+
+        return winner_count, color, radii
+
     def forward_count_weighted_residual(
         self,
         means3D,
