@@ -755,7 +755,7 @@ renderCUDA(
 
 				pixel_count++;
 				for (int ch = 0; ch < CHANNELS; ch++)
-					C[ch] += features[collected_id[j] * CHANNELS + ch] * color_scale * blend_alpha * T;
+					C[ch] += ((render_mode == RENDER_MODE_GAUSSIAN_BALL && contrib_max_mode == 3) ? clamp01(con_o.w) : features[collected_id[j] * CHANNELS + ch]) * color_scale * blend_alpha * T;
 
 				T = test_T;
 				last_contributor = contributor;
