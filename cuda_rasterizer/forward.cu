@@ -730,7 +730,10 @@ renderCUDA(
 				float color_scale = 1.0f;
 				if (render_mode == RENDER_MODE_FLAT_BALL || render_mode == RENDER_MODE_GAUSSIAN_BALL)
 				{
-					if (alpha <= 0.22f)
+					float alpha_cutoff = (render_mode == RENDER_MODE_GAUSSIAN_BALL)
+						? fminf(0.99f, fmaxf(0.0f, contrib_threshold))
+						: 0.22f;
+					if (alpha <= alpha_cutoff)
 						continue;
 					blend_alpha = 1.0f;
 					if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
