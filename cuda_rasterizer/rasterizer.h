@@ -53,6 +53,7 @@ namespace CudaRasterizer
 			bool debug = false,
 			int render_mode = 0,
 			float contrib_threshold = 0.9f,
+			float gaussian_ball_contour_cutoff = 0.22f,
 			int contrib_max_mode = 0,
 			int contrib_count_mode = 0,
 			float contrib_distance_scale = 1.0f,

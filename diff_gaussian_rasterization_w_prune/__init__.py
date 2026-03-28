@@ -97,6 +97,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.debug,
             raster_settings.render_mode,
             raster_settings.contrib_threshold,
+            raster_settings.gaussian_ball_contour_cutoff,
             raster_settings.contrib_max_mode,
             raster_settings.contrib_count_mode,
             raster_settings.contrib_distance_scale,
@@ -269,6 +270,7 @@ class GaussianRasterizationSettings(NamedTuple):
     f_count : bool
     render_mode : int
     contrib_threshold : float
+    gaussian_ball_contour_cutoff : float
     contrib_max_mode : int
     contrib_count_mode : int
     contrib_distance_scale : float

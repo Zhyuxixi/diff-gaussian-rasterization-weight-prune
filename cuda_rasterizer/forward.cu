@@ -379,6 +379,7 @@ renderCUDA(
 	float* __restrict__ out_color,
 	int render_mode,
 	float contrib_threshold,
+	float gaussian_ball_contour_cutoff,
 	int contrib_max_mode,
 	int contrib_count_mode,
 	float contrib_distance_scale,
@@ -722,40 +723,58 @@ renderCUDA(
 				if (power > 0.0f)
 					continue;
 
-				float alpha = min(0.99f, con_o.w * exp(power));
-				if (alpha < 1.0f / 255.0f)
+				float gaussian_falloff = exp(power);
+				float alpha = min(0.99f, con_o.w * gaussian_falloff);
+				if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
+				{
+					if (gaussian_falloff < 1.0f / 255.0f)
+						continue;
+				}
+				else if (alpha < 1.0f / 255.0f)
 					continue;
 
 				float blend_alpha = alpha;
-				float color_scale = 1.0f;
-				if (render_mode == RENDER_MODE_FLAT_BALL || render_mode == RENDER_MODE_GAUSSIAN_BALL)
-				{
-					float alpha_cutoff = (render_mode == RENDER_MODE_GAUSSIAN_BALL)
-						? fminf(0.99f, fmaxf(0.0f, contrib_threshold))
-						: 0.22f;
-					if (alpha <= alpha_cutoff)
-						continue;
-					blend_alpha = 1.0f;
-					if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
-						color_scale = exp(power);
-				}
-				valid_contributor_count++;
-				bool reached_cap = max_gaussians_per_pixel > 0
-					&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
+                float color_scale = 1.0f;
+                if (render_mode == RENDER_MODE_FLAT_BALL || render_mode == RENDER_MODE_GAUSSIAN_BALL)
+                {
+                    if (render_mode == RENDER_MODE_GAUSSIAN_BALL && con_o.w <= fminf(0.99f, fmaxf(0.0f, contrib_threshold)))
+                        continue;
+                    float alpha_cutoff = (render_mode == RENDER_MODE_GAUSSIAN_BALL)
+                        ? fminf(0.99f, fmaxf(0.0f, gaussian_ball_contour_cutoff))
+                        : 0.22f;
+                    float contour_alpha = (render_mode == RENDER_MODE_GAUSSIAN_BALL) ? gaussian_falloff : alpha;
+                    if (contour_alpha <= alpha_cutoff)
+                        continue;
+                    blend_alpha = 1.0f;
+                    if (render_mode == RENDER_MODE_GAUSSIAN_BALL)
+                        color_scale = gaussian_falloff;
+                }
+                valid_contributor_count++;
+                bool reached_cap = max_gaussians_per_pixel > 0
+                    && valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
 
-				float test_T = T * (1 - blend_alpha);
-				bool terminate_after = test_T < 0.0001f;
-				if (terminate_after && render_mode == RENDER_MODE_SPLAT)
-				{
-					done = true;
-					continue;
-				}
-				if (terminate_after)
-					test_T = 0.0f;
+                float test_T = T * (1 - blend_alpha);
+                bool terminate_after = test_T < 0.0001f;
+                if (terminate_after && render_mode == RENDER_MODE_SPLAT)
+                {
+                    done = true;
+                    continue;
+                }
+                if (terminate_after)
+                    test_T = 0.0f;
 
-				pixel_count++;
-				for (int ch = 0; ch < CHANNELS; ch++)
-					C[ch] += ((render_mode == RENDER_MODE_GAUSSIAN_BALL && contrib_max_mode == 3) ? clamp01(con_o.w) : features[collected_id[j] * CHANNELS + ch]) * color_scale * blend_alpha * T;
+                pixel_count++;
+                bool use_gaussian_ball_opacity_vis = (render_mode == RENDER_MODE_GAUSSIAN_BALL && contrib_max_mode == 3);
+                float3 gaussian_ball_vis_color = use_gaussian_ball_opacity_vis
+                    ? lerpColor(make_float3(0.133f, 0.482f, 0.925f), make_float3(0.988f, 0.553f, 0.180f), clamp01(con_o.w))
+                    : make_float3(0.0f, 0.0f, 0.0f);
+                for (int ch = 0; ch < CHANNELS; ch++)
+                {
+                    float base_color = features[collected_id[j] * CHANNELS + ch];
+                    if (use_gaussian_ball_opacity_vis)
+                        base_color = (ch == 0) ? gaussian_ball_vis_color.x : ((ch == 1) ? gaussian_ball_vis_color.y : gaussian_ball_vis_color.z);
+                    C[ch] += base_color * color_scale * blend_alpha * T;
+                }
 
 				T = test_T;
 				last_contributor = contributor;
@@ -1410,6 +1429,7 @@ void FORWARD::render(
 	float* out_color,
 	int render_mode,
 	float contrib_threshold,
+	float gaussian_ball_contour_cutoff,
 	int contrib_max_mode,
 	int contrib_count_mode,
 	float contrib_distance_scale,
@@ -1429,6 +1449,7 @@ void FORWARD::render(
 		out_color,
 		render_mode,
 		contrib_threshold,
+		gaussian_ball_contour_cutoff,
 		contrib_max_mode,
 		contrib_count_mode,
 		contrib_distance_scale,

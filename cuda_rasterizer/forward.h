@@ -65,6 +65,7 @@ namespace FORWARD
 		float* out_color,
 		int render_mode,
 		float contrib_threshold,
+		float gaussian_ball_contour_cutoff,
 		int contrib_max_mode,
 		int contrib_count_mode,
 		float contrib_distance_scale,
