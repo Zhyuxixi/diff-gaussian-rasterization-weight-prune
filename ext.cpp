@@ -21,6 +21,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("count_gaussians", &CountGaussiansCUDA);
   m.def("count_gaussians_contrib_max", &CountGaussiansContribMaxCUDA);
   m.def("count_gaussians_area_max", &CountGaussiansAreaMaxCUDA);
+  m.def("count_gaussians_area_max_residual", &CountGaussiansAreaMaxResidualCUDA);
   m.def("count_gaussians_weighted", &CountGaussiansWeightedCUDA);
   m.def("count_gaussians_weighted_residual", &CountGaussiansWeightedResidualCUDA);
 }
