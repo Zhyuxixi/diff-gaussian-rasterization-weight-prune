@@ -43,6 +43,7 @@ namespace FORWARD
 		float* depths,
 		float3* viewspace_points,
 		float* cov3Ds,
+		float* view_cov3Ds,
 		float* colors,
 		float4* conic_opacity,
 		const dim3 grid,
@@ -172,6 +173,44 @@ namespace FORWARD
 		float* weighted_residual_score,
 		float* out_color,
 		int max_gaussians_per_pixel); 
+
+	void depth_gaussian_winner(
+		const dim3 grid, dim3 block,
+		const uint2* ranges,
+		const uint32_t* point_list,
+		int W, int H,
+		const float2* points_xy_image,
+		const float3* viewspace_points,
+		const float* view_cov3Ds,
+		const float* features,
+		const float4* conic_opacity,
+		float* final_T,
+		uint32_t* n_contrib,
+		const float* bg_color,
+		float* out_color,
+		float* depth_map,
+		float tan_fovx,
+		float tan_fovy,
+		int max_gaussians_per_pixel);
+
+	void depth_gaussian_weighted(
+		const dim3 grid, dim3 block,
+		const uint2* ranges,
+		const uint32_t* point_list,
+		int W, int H,
+		const float2* points_xy_image,
+		const float3* viewspace_points,
+		const float* view_cov3Ds,
+		const float* features,
+		const float4* conic_opacity,
+		float* final_T,
+		uint32_t* n_contrib,
+		const float* bg_color,
+		float* out_color,
+		float* depth_map,
+		float tan_fovx,
+		float tan_fovy,
+		int max_gaussians_per_pixel);
 }
 
 

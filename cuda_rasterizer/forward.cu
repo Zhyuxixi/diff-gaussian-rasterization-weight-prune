@@ -24,6 +24,8 @@ namespace
 	constexpr int RENDER_MODE_GAUSSIAN_BALL = 2;
 	constexpr int RENDER_MODE_CONTRIB_COUNT = 3;
 	constexpr int RENDER_MODE_CONTRIB_MAX = 4;
+	constexpr int RENDER_MODE_DEPTH_WINNER = 5;
+	constexpr int RENDER_MODE_DEPTH_WEIGHTED = 6;
 	constexpr int CONTRIB_MAX_MODE_RATIO = 0;
 	constexpr int CONTRIB_MAX_MODE_COLOR = 1;
 	constexpr int CONTRIB_MAX_MODE_NEAREST_HIT = 2;
@@ -116,6 +118,120 @@ __device__ __forceinline__ bool evalStandardSplatAlpha(
 
 	alpha = min(0.99f, conic_opacity.w * exp(power));
 	return alpha >= (1.0f / 255.0f);
+}
+
+__device__ __forceinline__ void loadSymmetricMat3(const float* cov6, float mat[3][3])
+{
+	mat[0][0] = cov6[0];
+	mat[0][1] = cov6[1];
+	mat[0][2] = cov6[2];
+	mat[1][0] = cov6[1];
+	mat[1][1] = cov6[3];
+	mat[1][2] = cov6[4];
+	mat[2][0] = cov6[2];
+	mat[2][1] = cov6[4];
+	mat[2][2] = cov6[5];
+}
+
+__device__ __forceinline__ void storeSymmetricMat3(const float mat[3][3], float* cov6)
+{
+	cov6[0] = mat[0][0];
+	cov6[1] = mat[0][1];
+	cov6[2] = mat[0][2];
+	cov6[3] = mat[1][1];
+	cov6[4] = mat[1][2];
+	cov6[5] = mat[2][2];
+}
+
+__device__ __forceinline__ void rotateCovarianceToView(const float* cov6, const float* viewmatrix, float* out_cov6)
+{
+	float sigma[3][3];
+	loadSymmetricMat3(cov6, sigma);
+	float r[3][3] = {
+		{ viewmatrix[0], viewmatrix[4], viewmatrix[8] },
+		{ viewmatrix[1], viewmatrix[5], viewmatrix[9] },
+		{ viewmatrix[2], viewmatrix[6], viewmatrix[10] },
+	};
+	float temp[3][3] = { 0 };
+	float result[3][3] = { 0 };
+	for (int i = 0; i < 3; ++i)
+		for (int j = 0; j < 3; ++j)
+			for (int k = 0; k < 3; ++k)
+				temp[i][j] += r[i][k] * sigma[k][j];
+	for (int i = 0; i < 3; ++i)
+		for (int j = 0; j < 3; ++j)
+			for (int k = 0; k < 3; ++k)
+				result[i][j] += temp[i][k] * r[j][k];
+	storeSymmetricMat3(result, out_cov6);
+}
+
+__device__ __forceinline__ bool intersectRayWithViewEllipsoid(
+	const float3& ray_dir,
+	const float3& mean_view,
+	const float* cov6_view,
+	float& depth_mid)
+{
+	float sigma[3][3];
+	loadSymmetricMat3(cov6_view, sigma);
+	float det =
+		sigma[0][0] * (sigma[1][1] * sigma[2][2] - sigma[1][2] * sigma[2][1]) -
+		sigma[0][1] * (sigma[1][0] * sigma[2][2] - sigma[1][2] * sigma[2][0]) +
+		sigma[0][2] * (sigma[1][0] * sigma[2][1] - sigma[1][1] * sigma[2][0]);
+	if (fabsf(det) <= 1e-10f)
+		return false;
+	float inv_det = 1.0f / det;
+	float inv[3][3];
+	inv[0][0] = (sigma[1][1] * sigma[2][2] - sigma[1][2] * sigma[2][1]) * inv_det;
+	inv[0][1] = (sigma[0][2] * sigma[2][1] - sigma[0][1] * sigma[2][2]) * inv_det;
+	inv[0][2] = (sigma[0][1] * sigma[1][2] - sigma[0][2] * sigma[1][1]) * inv_det;
+	inv[1][0] = (sigma[1][2] * sigma[2][0] - sigma[1][0] * sigma[2][2]) * inv_det;
+	inv[1][1] = (sigma[0][0] * sigma[2][2] - sigma[0][2] * sigma[2][0]) * inv_det;
+	inv[1][2] = (sigma[0][2] * sigma[1][0] - sigma[0][0] * sigma[1][2]) * inv_det;
+	inv[2][0] = (sigma[1][0] * sigma[2][1] - sigma[1][1] * sigma[2][0]) * inv_det;
+	inv[2][1] = (sigma[0][1] * sigma[2][0] - sigma[0][0] * sigma[2][1]) * inv_det;
+	inv[2][2] = (sigma[0][0] * sigma[1][1] - sigma[0][1] * sigma[1][0]) * inv_det;
+
+	float md0 = inv[0][0] * ray_dir.x + inv[0][1] * ray_dir.y + inv[0][2] * ray_dir.z;
+	float md1 = inv[1][0] * ray_dir.x + inv[1][1] * ray_dir.y + inv[1][2] * ray_dir.z;
+	float md2 = inv[2][0] * ray_dir.x + inv[2][1] * ray_dir.y + inv[2][2] * ray_dir.z;
+	float mm0 = inv[0][0] * mean_view.x + inv[0][1] * mean_view.y + inv[0][2] * mean_view.z;
+	float mm1 = inv[1][0] * mean_view.x + inv[1][1] * mean_view.y + inv[1][2] * mean_view.z;
+	float mm2 = inv[2][0] * mean_view.x + inv[2][1] * mean_view.y + inv[2][2] * mean_view.z;
+	float a = ray_dir.x * md0 + ray_dir.y * md1 + ray_dir.z * md2;
+	float b = -2.0f * (ray_dir.x * mm0 + ray_dir.y * mm1 + ray_dir.z * mm2);
+	float c = mean_view.x * mm0 + mean_view.y * mm1 + mean_view.z * mm2 - 1.0f;
+	if (fabsf(a) <= 1e-10f)
+		return false;
+	float disc = b * b - 4.0f * a * c;
+	if (disc <= 0.0f)
+		return false;
+	float root = sqrtf(disc);
+	float t0 = (-b - root) / (2.0f * a);
+	float t1 = (-b + root) / (2.0f * a);
+	if (!(t0 > 0.0f && t1 > 0.0f))
+		return false;
+	depth_mid = 0.5f * (t0 + t1);
+	return isfinite(depth_mid) && depth_mid > 0.0f;
+}
+
+__device__ __forceinline__ bool resolveDepthCandidate(
+	const float3& mean_view,
+	bool has_intersection_depth,
+	float intersection_depth,
+	float& depth_value)
+{
+	if (has_intersection_depth && isfinite(intersection_depth) && intersection_depth > 0.0f)
+	{
+		depth_value = intersection_depth;
+		return true;
+	}
+
+	float center_depth = mean_view.z;
+	if (!isfinite(center_depth) || center_depth <= 0.0f)
+		return false;
+
+	depth_value = center_depth;
+	return true;
 }
 
 // Forward method for converting the input spherical harmonics
@@ -277,6 +393,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float* depths,
 	float3* viewspace_points,
 	float* cov3Ds,
+	float* view_cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -353,6 +470,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
 	viewspace_points[idx] = p_view;
+	rotateCovarianceToView(cov3D, viewmatrix, view_cov3Ds + idx * 6);
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
 	// Inverse 2D covariance and opacity neatly pack into one float4
@@ -1332,6 +1450,162 @@ renderCUDA_count_area_max(
 	}
 }
 
+template <uint32_t CHANNELS, bool WINNER_ONLY>
+__global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
+renderCUDA_depth(
+	const uint2* __restrict__ ranges,
+	const uint32_t* __restrict__ point_list,
+	int W, int H,
+	const float2* __restrict__ points_xy_image,
+	const float3* __restrict__ viewspace_points,
+	const float* __restrict__ view_cov3Ds,
+	const float* __restrict__ features,
+	const float4* __restrict__ conic_opacity,
+	float* __restrict__ final_T,
+	uint32_t* __restrict__ n_contrib,
+	const float* __restrict__ bg_color,
+	float* __restrict__ out_color,
+	float* __restrict__ depth_map,
+	float tan_fovx,
+	float tan_fovy,
+	int max_gaussians_per_pixel)
+{
+	auto block = cg::this_thread_block();
+	uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
+	uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
+	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
+	uint32_t pix_id = W * pix.y + pix.x;
+	float2 pixf = { (float)pix.x, (float)pix.y };
+	bool inside = pix.x < W && pix.y < H;
+	bool done = !inside;
+	uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
+	const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
+	int toDo = range.y - range.x;
+
+	__shared__ int collected_id[BLOCK_SIZE];
+	__shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+
+	float T = 1.0f;
+	uint32_t contributor = 0;
+	uint32_t last_contributor = 0;
+	uint32_t valid_contributor_count = 0;
+	float max_metric = 0.0f;
+	int max_id = -1;
+	float weighted_depth_sum = 0.0f;
+	float weighted_sum = 0.0f;
+
+	float ndc_x = ((2.0f * (pixf.x + 0.5f)) / fmaxf(1.0f, (float)W)) - 1.0f;
+	float ndc_y = ((2.0f * (pixf.y + 0.5f)) / fmaxf(1.0f, (float)H)) - 1.0f;
+	float3 ray_dir = make_float3(ndc_x * tan_fovx, ndc_y * tan_fovy, 1.0f);
+	float ray_norm = sqrtf(ray_dir.x * ray_dir.x + ray_dir.y * ray_dir.y + ray_dir.z * ray_dir.z);
+	if (ray_norm > 0.0f)
+	{
+		ray_dir.x /= ray_norm;
+		ray_dir.y /= ray_norm;
+		ray_dir.z /= ray_norm;
+	}
+
+	for (int i = 0, batch_to_do = toDo; i < rounds; i++, batch_to_do -= BLOCK_SIZE)
+	{
+		int num_done = __syncthreads_count(done);
+		if (num_done == BLOCK_SIZE)
+			break;
+
+		int progress = i * BLOCK_SIZE + block.thread_rank();
+		if (range.x + progress < range.y)
+		{
+			int coll_id = point_list[range.x + progress];
+			collected_id[block.thread_rank()] = coll_id;
+			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+		}
+		block.sync();
+
+		for (int j = 0; !done && j < min(BLOCK_SIZE, batch_to_do); j++)
+		{
+			contributor++;
+			float2 xy = collected_xy[j];
+			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+			float alpha = 0.0f;
+			if (!evalStandardSplatAlpha(d, collected_conic_opacity[j], alpha))
+				continue;
+			valid_contributor_count++;
+			bool reached_cap = max_gaussians_per_pixel > 0
+				&& valid_contributor_count >= static_cast<uint32_t>(max_gaussians_per_pixel);
+
+			int gaussian_id = collected_id[j];
+			float weight = alpha * T;
+			float metric = weight;
+			float depth_mid = 0.0f;
+			float depth_candidate = 0.0f;
+			float3 mean_view = viewspace_points[gaussian_id];
+			bool hit = intersectRayWithViewEllipsoid(
+				ray_dir,
+				mean_view,
+				view_cov3Ds + gaussian_id * 6,
+				depth_mid);
+			bool has_depth_candidate = resolveDepthCandidate(
+				mean_view,
+				hit,
+				depth_mid,
+				depth_candidate);
+			if (WINNER_ONLY)
+			{
+				if (has_depth_candidate && metric > max_metric)
+				{
+					max_metric = metric;
+					max_id = gaussian_id;
+					weighted_depth_sum = depth_candidate;
+				}
+			}
+			else if (has_depth_candidate)
+			{
+				weighted_depth_sum += depth_candidate * weight;
+				weighted_sum += weight;
+			}
+
+			float test_T = T * (1.0f - alpha);
+			if (test_T < 0.0001f)
+			{
+				T = 0.0f;
+				last_contributor = contributor;
+				done = true;
+				break;
+			}
+
+			T = test_T;
+			last_contributor = contributor;
+			if (reached_cap)
+			{
+				done = true;
+				break;
+			}
+		}
+	}
+
+	if (inside)
+	{
+		final_T[pix_id] = T;
+		n_contrib[pix_id] = last_contributor;
+		float depth_value = 0.0f;
+		bool has_depth = false;
+		if (WINNER_ONLY)
+		{
+			has_depth = max_id >= 0 && weighted_depth_sum > 0.0f;
+			depth_value = weighted_depth_sum;
+		}
+		else
+		{
+			has_depth = weighted_sum > 0.0f;
+			depth_value = has_depth ? (weighted_depth_sum / weighted_sum) : 0.0f;
+		}
+		depth_map[pix_id] = has_depth ? depth_value : 0.0f;
+		for (int ch = 0; ch < CHANNELS; ch++)
+			out_color[ch * H * W + pix_id] = has_depth ? 1.0f : bg_color[ch];
+	}
+}
+
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
 renderCUDA_count_area_max_residual(
@@ -1570,6 +1844,82 @@ void FORWARD::render(
 		max_gaussians_per_pixel);
 }
 
+void FORWARD::depth_gaussian_winner(
+	const dim3 grid, dim3 block,
+	const uint2* ranges,
+	const uint32_t* point_list,
+	int W, int H,
+	const float2* points_xy_image,
+	const float3* viewspace_points,
+	const float* view_cov3Ds,
+	const float* features,
+	const float4* conic_opacity,
+	float* final_T,
+	uint32_t* n_contrib,
+	const float* bg_color,
+	float* out_color,
+	float* depth_map,
+	float tan_fovx,
+	float tan_fovy,
+	int max_gaussians_per_pixel)
+{
+	renderCUDA_depth<NUM_CHANNELS, true> << <grid, block >> > (
+		ranges,
+		point_list,
+		W, H,
+		points_xy_image,
+		viewspace_points,
+		view_cov3Ds,
+		features,
+		conic_opacity,
+		final_T,
+		n_contrib,
+		bg_color,
+		out_color,
+		depth_map,
+		tan_fovx,
+		tan_fovy,
+		max_gaussians_per_pixel);
+}
+
+void FORWARD::depth_gaussian_weighted(
+	const dim3 grid, dim3 block,
+	const uint2* ranges,
+	const uint32_t* point_list,
+	int W, int H,
+	const float2* points_xy_image,
+	const float3* viewspace_points,
+	const float* view_cov3Ds,
+	const float* features,
+	const float4* conic_opacity,
+	float* final_T,
+	uint32_t* n_contrib,
+	const float* bg_color,
+	float* out_color,
+	float* depth_map,
+	float tan_fovx,
+	float tan_fovy,
+	int max_gaussians_per_pixel)
+{
+	renderCUDA_depth<NUM_CHANNELS, false> << <grid, block >> > (
+		ranges,
+		point_list,
+		W, H,
+		points_xy_image,
+		viewspace_points,
+		view_cov3Ds,
+		features,
+		conic_opacity,
+		final_T,
+		n_contrib,
+		bg_color,
+		out_color,
+		depth_map,
+		tan_fovx,
+		tan_fovy,
+		max_gaussians_per_pixel);
+}
+
 void FORWARD::count_gaussian(
 	const dim3 grid, dim3 block,
 	const uint2* ranges,
@@ -1789,6 +2139,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	float* depths,
 	float3* viewspace_points,
 	float* cov3Ds,
+	float* view_cov3Ds,
 	float* rgb,
 	float4* conic_opacity,
 	const dim3 grid,
@@ -1817,6 +2168,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		depths,
 		viewspace_points,
 		cov3Ds,
+		view_cov3Ds,
 		rgb,
 		conic_opacity,
 		grid,

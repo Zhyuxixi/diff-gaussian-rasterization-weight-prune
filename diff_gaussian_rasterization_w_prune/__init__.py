@@ -698,3 +698,113 @@ class GaussianRasterizer(nn.Module):
 
         return gaussians_count, important_score, weighted_important_score, weighted_residual_score, color, radii 
 
+    def forward_depth_winner(self, means3D, means2D, opacities, shs=None, colors_precomp=None, scales=None, rotations=None, cov3D_precomp=None):
+        raster_settings = self.raster_settings
+
+        if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
+            raise Exception('Please provide excatly one of either SHs or precomputed colors!')
+
+        if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
+            raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
+
+        if shs is None:
+            shs = torch.Tensor([])
+        if colors_precomp is None:
+            colors_precomp = torch.Tensor([])
+        if scales is None:
+            scales = torch.Tensor([])
+        if rotations is None:
+            rotations = torch.Tensor([])
+        if cov3D_precomp is None:
+            cov3D_precomp = torch.Tensor([])
+
+        args = (
+            raster_settings.bg,
+            means3D,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            raster_settings.scale_modifier,
+            cov3D_precomp,
+            raster_settings.viewmatrix,
+            raster_settings.projmatrix,
+            raster_settings.tanfovx,
+            raster_settings.tanfovy,
+            raster_settings.image_height,
+            raster_settings.image_width,
+            shs,
+            raster_settings.sh_degree,
+            raster_settings.campos,
+            raster_settings.prefiltered,
+            raster_settings.debug,
+            raster_settings.max_gaussians_per_pixel,
+        )
+        if raster_settings.debug:
+            cpu_args = cpu_deep_copy_tuple(args)
+            try:
+                depth, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, _ = _C.depth_gaussians_winner(*args)
+            except Exception as ex:
+                torch.save(cpu_args, "snapshot_fw_depth_winner.dump")
+                print("\nAn error occured in forward_depth_winner. Please forward snapshot_fw_depth_winner.dump for debugging.")
+                raise ex
+        else:
+            depth, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, _ = _C.depth_gaussians_winner(*args)
+
+        return color, radii, depth
+
+    def forward_depth_weighted(self, means3D, means2D, opacities, shs=None, colors_precomp=None, scales=None, rotations=None, cov3D_precomp=None):
+        raster_settings = self.raster_settings
+
+        if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
+            raise Exception('Please provide excatly one of either SHs or precomputed colors!')
+
+        if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
+            raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
+
+        if shs is None:
+            shs = torch.Tensor([])
+        if colors_precomp is None:
+            colors_precomp = torch.Tensor([])
+        if scales is None:
+            scales = torch.Tensor([])
+        if rotations is None:
+            rotations = torch.Tensor([])
+        if cov3D_precomp is None:
+            cov3D_precomp = torch.Tensor([])
+
+        args = (
+            raster_settings.bg,
+            means3D,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            raster_settings.scale_modifier,
+            cov3D_precomp,
+            raster_settings.viewmatrix,
+            raster_settings.projmatrix,
+            raster_settings.tanfovx,
+            raster_settings.tanfovy,
+            raster_settings.image_height,
+            raster_settings.image_width,
+            shs,
+            raster_settings.sh_degree,
+            raster_settings.campos,
+            raster_settings.prefiltered,
+            raster_settings.debug,
+            raster_settings.max_gaussians_per_pixel,
+        )
+        if raster_settings.debug:
+            cpu_args = cpu_deep_copy_tuple(args)
+            try:
+                depth, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, _ = _C.depth_gaussians_weighted(*args)
+            except Exception as ex:
+                torch.save(cpu_args, "snapshot_fw_depth_weighted.dump")
+                print("\nAn error occured in forward_depth_weighted. Please forward snapshot_fw_depth_weighted.dump for debugging.")
+                raise ex
+        else:
+            depth, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, _ = _C.depth_gaussians_weighted(*args)
+
+        return color, radii, depth
+
