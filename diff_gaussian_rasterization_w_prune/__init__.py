@@ -484,6 +484,82 @@ class GaussianRasterizer(nn.Module):
 
         return winner_count, color, radii
 
+    def forward_count_contrib_max_residual(
+        self,
+        means3D,
+        means2D,
+        opacities,
+        residual_map,
+        shs=None,
+        colors_precomp=None,
+        scales=None,
+        rotations=None,
+        cov3D_precomp=None,
+    ):
+        """
+        Forward pass with contrib-max winner counting plus winner residual accumulation.
+        Returns: winner_count, winner_residual_score, color, radii
+        """
+        raster_settings = self.raster_settings
+
+        if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
+            raise Exception('Please provide excatly one of either SHs or precomputed colors!')
+
+        if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
+            raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
+
+        if shs is None:
+            shs = torch.Tensor([])
+        if colors_precomp is None:
+            colors_precomp = torch.Tensor([])
+
+        if scales is None:
+            scales = torch.Tensor([])
+        if rotations is None:
+            rotations = torch.Tensor([])
+        if cov3D_precomp is None:
+            cov3D_precomp = torch.Tensor([])
+
+        if residual_map is None:
+            raise Exception('residual_map is required for forward_count_contrib_max_residual')
+
+        args = (
+            raster_settings.bg,
+            means3D,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            raster_settings.scale_modifier,
+            cov3D_precomp,
+            raster_settings.viewmatrix,
+            raster_settings.projmatrix,
+            raster_settings.tanfovx,
+            raster_settings.tanfovy,
+            raster_settings.image_height,
+            raster_settings.image_width,
+            shs,
+            raster_settings.sh_degree,
+            raster_settings.campos,
+            residual_map,
+            raster_settings.prefiltered,
+            raster_settings.debug,
+            raster_settings.max_gaussians_per_pixel,
+        )
+
+        if raster_settings.debug:
+            cpu_args = cpu_deep_copy_tuple(args)
+            try:
+                winner_count, winner_residual_score, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = _C.count_gaussians_contrib_max_residual(*args)
+            except Exception as ex:
+                torch.save(cpu_args, "snapshot_fw_contrib_max_residual.dump")
+                print("\nAn error occured in forward_count_contrib_max_residual. Please forward snapshot_fw_contrib_max_residual.dump for debugging.")
+                raise ex
+        else:
+            winner_count, winner_residual_score, num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer = _C.count_gaussians_contrib_max_residual(*args)
+
+        return winner_count, winner_residual_score, color, radii
+
     def forward_count_area_max(self, means3D, means2D, opacities, shs=None, colors_precomp=None, scales=None, rotations=None, cov3D_precomp=None):
         """
         Forward pass with area-max winner counting (winner by alpha * T).
