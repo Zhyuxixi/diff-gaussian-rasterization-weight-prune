@@ -10,6 +10,7 @@
 #
 
 import os
+import sys
 from pathlib import Path
 
 import torch
@@ -38,6 +39,17 @@ def _matching_cuda_package_dirs(package_prefix, child_parts, sentinel):
             if (child_dir / sentinel).exists():
                 candidates.append(str(child_dir))
     return candidates
+
+
+def _conda_cuda_library_dirs():
+    candidates = []
+    for prefix in (os.environ.get("CONDA_PREFIX"), sys.prefix):
+        if not prefix:
+            continue
+        lib_dir = Path(prefix) / "Library" / "lib"
+        if (lib_dir / "cudart.lib").exists():
+            candidates.append(str(lib_dir))
+    return list(dict.fromkeys(candidates))
 
 
 def _ensure_cuda_home_from_conda_cache():
@@ -80,7 +92,7 @@ setup(
             ),
             library_dirs=_matching_cuda_package_dirs(
                 "cuda-cudart-", ["lib", "x64"], "cudart.lib"
-            ),
+            ) + _conda_cuda_library_dirs(),
             sources=[
             "cuda_rasterizer/rasterizer_impl.cu",
             "cuda_rasterizer/forward.cu",
